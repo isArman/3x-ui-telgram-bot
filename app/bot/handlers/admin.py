@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 from aiogram import Router, F
-from aiogram.types import CallbackQuery
+from aiogram.types import CallbackQuery, Message
+from aiogram.fsm.context import FSMContext
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -8,7 +9,7 @@ from app.config.texts import get_text
 from app.config.settings import settings
 from app.database.models import Order, Payment, VPNAccount
 from app.database.session import AsyncSessionLocal
-from app.xui.client import xui_client
+from app.bot.states import AdminStates
 
 router = Router()
 
@@ -19,8 +20,8 @@ def is_admin(user_id: int) -> bool:
 
 
 @router.callback_query(F.data.startswith("approve_payment:"))
-async def approve_payment(callback: CallbackQuery):
-   """Approve payment and create VPN account"""
+async def approve_payment(callback: CallbackQuery, state: FSMContext):
+   """Approve payment - ask admin for subscription link"""
    if not is_admin(callback.from_user.id):
        await callback.answer("شما دسترسی ندارید!", show_alert=True)
        return
@@ -47,30 +48,49 @@ async def approve_payment(callback: CallbackQuery):
            await callback.answer("سفارش یافت نشد!", show_alert=True)
            return
        
-       # Create VPN account in 3x-ui
-       email = f"tg_{order.user_id}"
+       # Store payment info in state and ask for subscription
+       await state.update_data(payment_id=payment_id, order_id=order.id)
+       await state.set_state(AdminStates.waiting_for_subscription)
        
-       vpn_result = await xui_client.add_client(
-           email=email,
-           traffic_gb=order.traffic_gb,
-           expire_days=order.days
+       await callback.message.answer(
+           f"✅ پرداخت تایید شد!\n\n"
+           f"📦 جزئیات سفارش:\n"
+           f"👤 کاربر: {order.user_id}\n"
+           f"⏱ مدت: {order.days} روز\n"
+           f"📊 حجم: {order.traffic_gb} گیگابایت\n\n"
+           f"لطفاً لینک اشتراک (subscription link) را ارسال کنید:"
        )
+       await callback.answer()
+
+
+@router.message(AdminStates.waiting_for_subscription)
+async def receive_subscription(message: Message, state: FSMContext):
+   """Receive subscription link from admin and save it"""
+   if not is_admin(message.from_user.id):
+       return
+   
+   subscription_url = message.text.strip()
+   data = await state.get_data()
+   payment_id = data.get("payment_id")
+   order_id = data.get("order_id")
+   
+   async with AsyncSessionLocal() as session:
+       # Get payment and order
+       result = await session.execute(select(Payment).where(Payment.id == payment_id))
+       payment = result.scalar_one_or_none()
        
-       if not vpn_result:
-           await callback.answer("خطا در ایجاد اکانت VPN!", show_alert=True)
+       result = await session.execute(select(Order).where(Order.id == order_id))
+       order = result.scalar_one_or_none()
+       
+       if not payment or not order:
+           await message.answer("❌ خطا: سفارش یا پرداخت یافت نشد!")
+           await state.clear()
            return
-       
-       # Get client UUID from result
-       client_uuid = vpn_result.get("uuid")
-       
-       # Get subscription path
-       subscription_path = await xui_client.get_client_subscription(client_uuid)
-       subscription_url = f"{settings.XUI_URL}{subscription_path}"
        
        # Update payment status
        payment.status = "approved"
        payment.reviewed_at = datetime.utcnow()
-       payment.reviewed_by = callback.from_user.id
+       payment.reviewed_by = message.from_user.id
        
        # Update order status
        order.status = "completed"
@@ -79,8 +99,8 @@ async def approve_payment(callback: CallbackQuery):
        vpn_account = VPNAccount(
            order_id=order.id,
            user_id=order.user_id,
-           xui_client_id=client_uuid,
-           subscription_path=subscription_path,
+           xui_client_id="manual",
+           subscription_path=subscription_url,
            expires_at=datetime.utcnow() + timedelta(days=order.days),
            traffic_limit_gb=order.traffic_gb,
            is_active=True
@@ -91,18 +111,20 @@ async def approve_payment(callback: CallbackQuery):
        
        # Notify user
        try:
-           await callback.bot.send_message(
+           await message.bot.send_message(
                chat_id=order.user_id,
                text=get_text("payment_approved", subscription_url=subscription_url)
            )
+           await message.answer(
+               f"✅ اشتراک با موفقیت ثبت شد و به کاربر ارسال شد!\n\n"
+               f"👤 کاربر: {order.user_id}\n"
+               f"🔗 لینک: {subscription_url}"
+           )
        except Exception as e:
            print(f"Failed to notify user: {e}")
-       
-       # Update admin message
-       await callback.message.edit_caption(
-           caption=callback.message.caption + "\n\n✅ تایید شد توسط ادمین"
-       )
-       await callback.answer("پرداخت تایید شد و اکانت ایجاد شد!", show_alert=True)
+           await message.answer(f"⚠️ خطا در ارسال به کاربر: {e}")
+   
+   await state.clear()
 
 
 @router.callback_query(F.data.startswith("reject_payment:"))

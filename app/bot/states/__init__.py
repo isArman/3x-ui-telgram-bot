@@ -9,3 +9,7 @@ class CustomPlanStates(StatesGroup):
 
 class PaymentStates(StatesGroup):
     waiting_for_receipt = State()
+
+
+class AdminStates(StatesGroup):
+    waiting_for_subscription = State()
