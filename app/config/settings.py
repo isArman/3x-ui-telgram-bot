@@ -6,7 +6,13 @@ from typing import List
 class Settings:
     # Bot
     BOT_TOKEN: str = os.getenv("BOT_TOKEN", "")
-    ADMIN_IDS: List[int] = [int(x.strip()) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
+    
+    @property
+    def ADMIN_IDS(self) -> List[int]:
+        admin_ids_str = os.getenv("ADMIN_IDS", "")
+        if not admin_ids_str:
+            return []
+        return [int(x.strip()) for x in admin_ids_str.split(",") if x.strip().isdigit()]
 
     # Database
     DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///data/db.sqlite3")
@@ -31,9 +37,6 @@ class Settings:
         required = {
             "BOT_TOKEN": cls.BOT_TOKEN,
             "ADMIN_IDS": cls.ADMIN_IDS,
-            "XUI_URL": cls.XUI_URL,
-            "XUI_USERNAME": cls.XUI_USERNAME,
-            "XUI_PASSWORD": cls.XUI_PASSWORD,
             "CARD_NUMBER": cls.CARD_NUMBER,
             "CARD_HOLDER": cls.CARD_HOLDER,
         }

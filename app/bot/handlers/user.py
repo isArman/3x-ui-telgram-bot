@@ -203,8 +203,9 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext):
 async def cancel_order(callback: CallbackQuery, state: FSMContext):
     """Cancel order"""
     await state.clear()
-    await callback.message.edit_text("سفارش لغو شد.")
-    await callback.message.answer(
+    await callback.message.delete()
+    await callback.bot.send_message(
+        chat_id=callback.from_user.id,
         get_text("start"),
         reply_markup=main_menu_keyboard()
     )
