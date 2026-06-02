@@ -42,12 +42,14 @@ class XUIClient:
                        cookies = response.cookies
                        if cookies:
                            cookie_str = "; ".join([f"{k}={v}" for k, v in cookies.items()])
-                           self.session_cookie = cookie_str
-                       return True
-           return False
-       except Exception as e:
-           print(f"Login error: {e}")
-           return False
+                          self.session_cookie = cookie_str
+                      return True
+          return False
+      except Exception as e:
+          print(f"Login error: {e}")
+          import traceback
+          traceback.print_exc()
+          return False
 
    async def _ensure_logged_in(self):
        """Ensure we have valid session"""
@@ -98,28 +100,38 @@ class XUIClient:
            "id": self.inbound_id,
            "settings": json.dumps(client_settings)
        }
-       
-       try:
-           async with httpx.AsyncClient(verify=False) as client:
-               response = await client.post(
-                   f"{self.base_url}/panel/api/inbounds/addClient",
-                   data=payload,
-                   headers=await self._get_headers()
-               )
-               
-               if response.status_code == 200:
-                   data = response.json()
-                   if data.get("success"):
-                       return {
-                           "email": email,
-                           "uuid": client_uuid,
-                           "expiry_time": expiry_time,
-                           "traffic_gb": traffic_gb
-                       }
-           return None
-       except Exception as e:
-           print(f"Add client error: {e}")
-           return None
+      
+      try:
+          async with httpx.AsyncClient(verify=False) as client:
+              print(f"Sending add client request to: {self.base_url}/panel/api/inbounds/addClient")
+              print(f"Payload: {payload}")
+              print(f"Headers: {await self._get_headers()}")
+              
+              response = await client.post(
+                  f"{self.base_url}/panel/api/inbounds/addClient",
+                  data=payload,
+                  headers=await self._get_headers()
+              )
+              
+              print(f"Response status: {response.status_code}")
+              print(f"Response body: {response.text}")
+              
+              if response.status_code == 200:
+                  data = response.json()
+                  if data.get("success"):
+                      return {
+                          "email": email,
+                          "uuid": client_uuid,
+                          "expiry_time": expiry_time,
+                          "traffic_gb": traffic_gb
+                      }
+              print(f"Add client failed: {response.text}")
+          return None
+      except Exception as e:
+          print(f"Add client error: {e}")
+          import traceback
+          traceback.print_exc()
+          return None
 
    async def get_client_subscription(self, client_uuid: str) -> Optional[str]:
        """
