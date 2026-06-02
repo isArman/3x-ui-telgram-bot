@@ -206,7 +206,7 @@ async def cancel_order(callback: CallbackQuery, state: FSMContext):
     await callback.message.delete()
     await callback.bot.send_message(
         chat_id=callback.from_user.id,
-        get_text("start"),
+        text=get_text("start"),
         reply_markup=main_menu_keyboard()
     )
     await callback.answer()
