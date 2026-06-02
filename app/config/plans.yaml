@@ -1,0 +1,25 @@
+ plans:
+   - id: basic
+     name: "پلن پایه"
+     days: 30
+     traffic: 50
+     price: 100000
+     description: "یک ماهه - 50 گیگابایت"
+ 
+   - id: standard
+     name: "پلن استاندارد"
+     days: 30
+     traffic: 100
+     price: 180000
+     description: "یک ماهه - 100 گیگابایت"
+ 
+   - id: premium
+     name: "پلن پریمیوم"
+     days: 60
+     traffic: 200
+     price: 340000
+     description: "دو ماهه - 200 گیگابایت"
+ 
+ pricing:
+   per_day: 1000
+   per_gb: 3000
