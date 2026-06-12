@@ -7,7 +7,7 @@
  - 📦 Pre-defined VPN plans with custom pricing
  - 🎨 Custom plan creation (user-defined days and traffic)
  - 💳 Payment receipt upload and admin review
- - ✅ Automatic VPN account creation on approval
+ - ✅ Automatic config delivery from pre-stocked inventory on approval
  - 🔒 SQLite database with async support
  - 🐳 Docker-ready with docker-compose
  - 🔄 Restart-safe stateless design
@@ -82,8 +82,8 @@
  2. Order is created with payment instructions
  3. User uploads payment receipt
  4. Admin reviews and approves/rejects payment
- 5. On approval, VPN account is automatically created
- 6. User receives subscription link
+ 5. On approval, a pre-added config is sent to the user automatically
+ 6. User receives subscription link or vless config
  
 ## Admin Flow
 
@@ -97,19 +97,20 @@ Admins receive payment notifications with:
 
 | Command | Description |
 |---------|-------------|
-| `/dashboard` | Statistics overview |
+| `/configs` | Manage pre-made configs per plan |
+| `/dashboard` | Statistics and config stock overview |
 | `/pending` | Pending payments list |
 | `/payments` | Payment history |
-| `/panel` | Configure 3x-ui panel and auto account creation |
 
-### 3x-ui Panel Setup
+### Config inventory
 
-1. Send `/panel` in Telegram (admin only)
-2. Set panel URL, username, password, and inbound ID
-3. Tap **Test connection** to verify login and inbound
-4. Enable **Auto create** — on payment approval, the bot creates a client via [3x-ui API](https://github.com/MHSanaei/3x-ui/wiki) and sends the subscription link to the user
+1. Create VPN configs manually in your panel
+2. Send `/configs` in Telegram (admin only)
+3. Tap **افزودن کانفیگ** and pick a plan (basic, standard, premium)
+4. Paste the subscription link or `vless://` config
+5. When a user buys that plan and you approve payment, the next free config is sent automatically
 
-If auto create is disabled, the admin manually pastes the subscription link after approval (previous behavior).
+Custom plan orders still require pasting a config manually after approval.
  
  ## Customization
  
@@ -138,7 +139,6 @@ If auto create is disabled, the admin manually pastes the subscription link afte
  
  - Python 3.11+
  - Docker & Docker Compose
- - 3x-ui panel with API access
  - Telegram Bot Token
  
  ## Development
@@ -157,8 +157,7 @@ If auto create is disabled, the admin manually pastes the subscription link afte
  - SQLite database is stored in `./data/db.sqlite3`
  - Bot uses FSM for multi-step flows
  - All timestamps are in UTC
- - VPN account email format: `tg_{telegram_id}`
- - Default inbound ID is 1 (configurable via `XUI_INBOUND_ID`)
+ - VPN configs are managed manually via `/configs` and assigned on payment approval
  
  ## Future Enhancements
  

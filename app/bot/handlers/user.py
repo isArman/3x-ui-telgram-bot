@@ -1,5 +1,3 @@
-import yaml
-from pathlib import Path
 from aiogram import Router, F
 from aiogram.filters import CommandStart
 from aiogram.types import Message, CallbackQuery
@@ -9,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.texts import get_text
 from app.config.settings import settings
+from app.config.plans_loader import PLANS, PRICING
 from app.database.models import User, Order, Payment
 from app.database.session import AsyncSessionLocal
 from app.bot.states import CustomPlanStates, PaymentStates
@@ -21,13 +20,6 @@ from app.bot.keyboards.user import (
 )
 
 router = Router()
-
-# Load plans
-plans_path = Path(__file__).parent.parent.parent / "config" / "plans.yaml"
-with open(plans_path, "r", encoding="utf-8") as f:
-    plans_data = yaml.safe_load(f)
-    PLANS = plans_data["plans"]
-    PRICING = plans_data["pricing"]
 
 
 def calculate_custom_price(days: int, traffic_gb: int) -> int:
@@ -92,9 +84,10 @@ async def select_plan(callback: CallbackQuery, state: FSMContext):
         return
     
     await state.update_data(
+        plan_id=plan_id,
         days=plan["days"],
         traffic=plan["traffic"],
-        price=plan["price"]
+        price=plan["price"],
     )
     
     await callback.message.edit_text(
@@ -209,7 +202,8 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext):
                 days=data["days"],
                 traffic_gb=data["traffic"],
                 price=data["price"],
-                status="pending"
+                plan_id=data.get("plan_id"),
+                status="pending",
             )
             session.add(order)
             await session.commit()

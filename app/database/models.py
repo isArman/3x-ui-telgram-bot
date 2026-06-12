@@ -24,7 +24,8 @@ class Order(Base):
     days: Mapped[int] = mapped_column(Integer, nullable=False)
     traffic_gb: Mapped[int] = mapped_column(Integer, nullable=False)
     price: Mapped[int] = mapped_column(Integer, nullable=False)
-    status: Mapped[str] = mapped_column(String(50), default="pending")  # pending, paid, approved, rejected, completed
+    plan_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    status: Mapped[str] = mapped_column(String(50), default="pending")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -60,16 +61,16 @@ class VPNAccount(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
-class PanelConfig(Base):
-    """Single-row 3x-ui panel configuration (id=1)."""
+class PlanConfig(Base):
+    """Pre-made VPN config/subscription link assigned to a plan from plans.yaml."""
 
-    __tablename__ = "panel_config"
+    __tablename__ = "plan_configs"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
-    url: Mapped[str] = mapped_column(String(500), default="")
-    username: Mapped[str] = mapped_column(String(255), default="")
-    password: Mapped[str] = mapped_column(String(255), default="")
-    inbound_id: Mapped[int] = mapped_column(Integer, default=1)
-    auto_create: Mapped[bool] = mapped_column(Boolean, default=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    updated_by: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    plan_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    config_text: Mapped[str] = mapped_column(Text, nullable=False)
+    is_assigned: Mapped[bool] = mapped_column(Boolean, default=False)
+    order_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_by: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    assigned_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)

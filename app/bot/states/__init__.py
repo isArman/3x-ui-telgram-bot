@@ -13,7 +13,4 @@ class PaymentStates(StatesGroup):
 
 class AdminStates(StatesGroup):
     waiting_for_subscription = State()
-    waiting_for_panel_url = State()
-    waiting_for_panel_username = State()
-    waiting_for_panel_password = State()
-    waiting_for_panel_inbound_id = State()
+    waiting_for_config_text = State()

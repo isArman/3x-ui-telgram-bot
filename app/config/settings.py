@@ -17,12 +17,6 @@ class Settings:
     # Database
     DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///data/db.sqlite3")
 
-    # 3x-ui Panel
-    XUI_URL: str = os.getenv("XUI_URL", "")
-    XUI_USERNAME: str = os.getenv("XUI_USERNAME", "")
-    XUI_PASSWORD: str = os.getenv("XUI_PASSWORD", "")
-    XUI_INBOUND_ID: int = int(os.getenv("XUI_INBOUND_ID", "1"))
-
     # Payment
     CARD_NUMBER: str = os.getenv("CARD_NUMBER", "")
     CARD_HOLDER: str = os.getenv("CARD_HOLDER", "")
