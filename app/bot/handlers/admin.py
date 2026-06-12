@@ -398,41 +398,19 @@ async def reject_payment(callback: CallbackQuery):
         await callback.answer("پرداخت رد شد!", show_alert=True)
 
 
-@router.callback_query(F.data == "admin:dashboard")
-async def admin_dashboard_callback(callback: CallbackQuery):
-    if not is_admin(callback.from_user.id):
-        await callback.answer("دسترسی ندارید!", show_alert=True)
-        return
-    await show_dashboard(callback.message)
-    await callback.answer()
-
-
-@router.callback_query(F.data == "admin:pending")
-async def admin_pending_callback(callback: CallbackQuery):
-    if not is_admin(callback.from_user.id):
-        await callback.answer("دسترسی ندارید!", show_alert=True)
-        return
-    await show_pending_payments(callback.message)
-    await callback.answer()
-
-
-@router.message(Command("dashboard"))
-async def show_dashboard(message: Message):
+async def _send_dashboard(bot, chat_id: int) -> None:
     from app.utils.statistics import get_dashboard_stats
 
-    if not is_admin(message.from_user.id):
-        await message.answer("⛔ شما دسترسی ادمین ندارید.")
-        return
+    async with AsyncSessionLocal() as session:
+        stats = await get_dashboard_stats(session)
+        stock_lines = []
+        for plan in PLANS:
+            n = await count_available(session, plan["id"])
+            stock_lines.append(f"  • {plan['name']}: {n} آزاد")
 
-    try:
-        async with AsyncSessionLocal() as session:
-            stats = await get_dashboard_stats(session)
-            stock_lines = []
-            for plan in PLANS:
-                n = await count_available(session, plan["id"])
-                stock_lines.append(f"  • {plan['name']}: {n} آزاد")
-
-            await message.answer(
+        await bot.send_message(
+            chat_id=chat_id,
+            text=(
                 "📊 داشبورد مدیریت\n\n"
                 f"👥 کاربران: {stats['total_users']}\n"
                 f"📦 سفارشات: {stats['total_orders']}\n"
@@ -441,18 +419,11 @@ async def show_dashboard(message: Message):
                 f"💰 درآمد کل: {stats['total_revenue']:,} تومان\n\n"
                 "📦 موجودی کانفیگ:\n" + "\n".join(stock_lines) + "\n\n"
                 "🗂 از منو «⚙️ پنل ادمین» کانفیگ‌ها را مدیریت کنید."
-            )
-    except Exception as exc:
-        logger.error(f"Error showing dashboard: {exc}")
-        await message.answer("خطا در نمایش داشبورد!")
+            ),
+        )
 
 
-@router.message(Command("pending"))
-async def show_pending_payments(message: Message):
-    if not is_admin(message.from_user.id):
-        await message.answer("⛔ شما دسترسی ادمین ندارید.")
-        return
-
+async def _send_pending_payments(bot, chat_id: int) -> None:
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(Payment)
@@ -463,7 +434,7 @@ async def show_pending_payments(message: Message):
         payments = result.scalars().all()
 
         if not payments:
-            await message.answer("هیچ پرداخت در انتظاری وجود ندارد.")
+            await bot.send_message(chat_id=chat_id, text="هیچ پرداخت در انتظاری وجود ندارد.")
             return
 
         text = "📋 پرداخت‌های در انتظار:\n\n"
@@ -480,7 +451,49 @@ async def show_pending_payments(message: Message):
                     f"💰 {order.price:,} تومان\n{'─' * 25}\n"
                 )
 
-        await message.answer(text)
+        await bot.send_message(chat_id=chat_id, text=text)
+
+
+@router.callback_query(F.data == "admin:dashboard")
+async def admin_dashboard_callback(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("دسترسی ندارید!", show_alert=True)
+        return
+    try:
+        await _send_dashboard(callback.bot, callback.message.chat.id)
+    except Exception as exc:
+        logger.error(f"Error showing dashboard: {exc}")
+        await callback.message.answer("خطا در نمایش داشبورد!")
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin:pending")
+async def admin_pending_callback(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("دسترسی ندارید!", show_alert=True)
+        return
+    await _send_pending_payments(callback.bot, callback.message.chat.id)
+    await callback.answer()
+
+
+@router.message(Command("dashboard"))
+async def show_dashboard(message: Message):
+    if not is_admin(message.from_user.id):
+        await message.answer("⛔ شما دسترسی ادمین ندارید.")
+        return
+    try:
+        await _send_dashboard(message.bot, message.chat.id)
+    except Exception as exc:
+        logger.error(f"Error showing dashboard: {exc}")
+        await message.answer("خطا در نمایش داشبورد!")
+
+
+@router.message(Command("pending"))
+async def show_pending_payments(message: Message):
+    if not is_admin(message.from_user.id):
+        await message.answer("⛔ شما دسترسی ادمین ندارید.")
+        return
+    await _send_pending_payments(message.bot, message.chat.id)
 
 
 @router.message(Command("payments"))
