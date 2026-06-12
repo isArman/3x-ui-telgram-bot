@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 
 from aiogram import F, Router
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy import func, select
@@ -62,9 +63,10 @@ async def send_config_to_user(bot, user_id: int, config_text: str) -> None:
 # --- Config inventory admin ---
 
 
-@router.message(F.text == "/configs")
+@router.message(Command("configs"))
 async def configs_menu(message: Message):
     if not is_admin(message.from_user.id):
+        await message.answer("⛔ شما دسترسی ادمین ندارید.")
         return
 
     await message.answer(
@@ -347,11 +349,12 @@ async def reject_payment(callback: CallbackQuery):
         await callback.answer("پرداخت رد شد!", show_alert=True)
 
 
-@router.message(F.text == "/dashboard")
+@router.message(Command("dashboard"))
 async def show_dashboard(message: Message):
     from app.utils.statistics import get_dashboard_stats
 
     if not is_admin(message.from_user.id):
+        await message.answer("⛔ شما دسترسی ادمین ندارید.")
         return
 
     try:
@@ -377,9 +380,10 @@ async def show_dashboard(message: Message):
         await message.answer("خطا در نمایش داشبورد!")
 
 
-@router.message(F.text == "/pending")
+@router.message(Command("pending"))
 async def show_pending_payments(message: Message):
     if not is_admin(message.from_user.id):
+        await message.answer("⛔ شما دسترسی ادمین ندارید.")
         return
 
     async with AsyncSessionLocal() as session:
@@ -412,9 +416,10 @@ async def show_pending_payments(message: Message):
         await message.answer(text)
 
 
-@router.message(F.text == "/payments")
+@router.message(Command("payments"))
 async def show_payment_history(message: Message):
     if not is_admin(message.from_user.id):
+        await message.answer("⛔ شما دسترسی ادمین ندارید.")
         return
 
     async with AsyncSessionLocal() as session:
