@@ -50,7 +50,7 @@ class VPNAccount(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     order_id: Mapped[int] = mapped_column(Integer, nullable=False, unique=True)
     user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    xui_client_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    config_ref: Mapped[str] = mapped_column(String(255), nullable=False)
     subscription_path: Mapped[str] = mapped_column(String(500), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     traffic_limit_gb: Mapped[int] = mapped_column(Integer, nullable=False)

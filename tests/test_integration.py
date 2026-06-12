@@ -52,7 +52,7 @@ async def test_complete_order_flow():
         vpn_account = VPNAccount(
             order_id=order.id,
             user_id=999888777,
-            xui_client_id="manual",
+            config_ref="manual",
             subscription_path="https://vpn.example.com/sub/uuid",
             expires_at=datetime.utcnow() + timedelta(days=30),
             traffic_limit_gb=40,
@@ -169,7 +169,7 @@ async def test_account_expiry_status():
         expired_account = VPNAccount(
             order_id=order.id,
             user_id=666555444,
-            xui_client_id="expired",
+            config_ref="expired",
             subscription_path="https://vpn.com/expired",
             expires_at=datetime.utcnow() - timedelta(days=1),
             traffic_limit_gb=10,

@@ -63,7 +63,7 @@ async def test_dashboard_stats_with_data():
         vpn_account = VPNAccount(
             order_id=order.id,
             user_id=123456789,
-            xui_client_id="test_uuid",
+            config_ref="test_uuid",
             subscription_path="https://example.com/sub/test",
             expires_at=datetime.utcnow() + timedelta(days=30),
             traffic_limit_gb=40,
@@ -107,7 +107,7 @@ async def test_expiring_soon_accounts():
         vpn_account = VPNAccount(
             order_id=order.id,
             user_id=999999,
-            xui_client_id="expiring_uuid",
+            config_ref="expiring_uuid",
             subscription_path="https://example.com/sub/expiring",
             expires_at=datetime.utcnow() + timedelta(days=2),
             traffic_limit_gb=10,

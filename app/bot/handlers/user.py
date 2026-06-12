@@ -16,10 +16,14 @@ from app.bot.keyboards.user import (
     plans_keyboard,
     confirm_order_keyboard,
     cancel_keyboard,
-    account_actions_keyboard
+    account_actions_keyboard,
 )
 
 router = Router()
+
+
+def user_main_menu(user_id: int):
+    return main_menu_keyboard(is_admin=user_id in settings.ADMIN_IDS)
 
 
 def calculate_custom_price(days: int, traffic_gb: int) -> int:
@@ -55,7 +59,7 @@ async def cmd_start(message: Message, state: FSMContext):
     
     await message.answer(
         get_text("start"),
-        reply_markup=main_menu_keyboard()
+        reply_markup=user_main_menu(message.from_user.id),
     )
 
 
@@ -112,7 +116,7 @@ async def custom_plan_days(message: Message, state: FSMContext):
     """Handle custom plan days input"""
     if message.text == "❌ لغو":
         await state.clear()
-        await message.answer("لغو شد.", reply_markup=main_menu_keyboard())
+        await message.answer("لغو شد.", reply_markup=user_main_menu(message.from_user.id))
         return
     
     try:
@@ -133,7 +137,7 @@ async def custom_plan_traffic(message: Message, state: FSMContext):
     """Handle custom plan traffic input"""
     if message.text == "❌ لغو":
         await state.clear()
-        await message.answer("لغو شد.", reply_markup=main_menu_keyboard())
+        await message.answer("لغو شد.", reply_markup=user_main_menu(message.from_user.id))
         return
     
     try:
@@ -230,7 +234,7 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext):
         logger.error(f"Error creating order for user {callback.from_user.id}: {e}")
         await callback.message.edit_text(
             "خطایی در ایجاد سفارش رخ داد. لطفاً دوباره تلاش کنید.",
-            reply_markup=main_menu_keyboard()
+            reply_markup=user_main_menu(message.from_user.id)
         )
         await state.clear()
         return
@@ -246,7 +250,7 @@ async def cancel_order(callback: CallbackQuery, state: FSMContext):
     await callback.bot.send_message(
         chat_id=callback.from_user.id,
         text=get_text("start"),
-        reply_markup=main_menu_keyboard()
+        reply_markup=user_main_menu(message.from_user.id)
     )
     await callback.answer()
 
@@ -285,7 +289,7 @@ async def receive_receipt(message: Message, state: FSMContext):
             # Notify user
             await message.answer(
                 get_text("receipt_received"),
-                reply_markup=main_menu_keyboard()
+                reply_markup=user_main_menu(message.from_user.id)
             )
             
             # Notify admins
@@ -374,7 +378,7 @@ async def my_accounts(message: Message):
                 await message.answer(
                     "شما هنوز هیچ اکانتی ندارید.\n\n"
                     "برای خرید اکانت جدید از منو 'خرید پلن' استفاده کنید.",
-                    reply_markup=main_menu_keyboard()
+                    reply_markup=user_main_menu(message.from_user.id)
                 )
                 return
             
@@ -411,5 +415,5 @@ async def my_accounts(message: Message):
         logger.error(f"Error showing accounts for user {message.from_user.id}: {e}")
         await message.answer(
             "خطایی رخ داد. لطفاً دوباره تلاش کنید.",
-            reply_markup=main_menu_keyboard()
+            reply_markup=user_main_menu(message.from_user.id)
         )

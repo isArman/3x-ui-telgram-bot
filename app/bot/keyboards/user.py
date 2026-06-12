@@ -3,7 +3,7 @@ from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
 from typing import List, Dict, Any
 
 
-def main_menu_keyboard() -> ReplyKeyboardMarkup:
+def main_menu_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
     """Main menu keyboard"""
     builder = ReplyKeyboardBuilder()
     builder.row(
@@ -14,13 +14,15 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
         KeyboardButton(text="📋 سفارش‌های من"),
         KeyboardButton(text="💳 اکانت‌های من")
     )
+    if is_admin:
+        builder.row(KeyboardButton(text="⚙️ پنل ادمین"))
     return builder.as_markup(resize_keyboard=True)
 
 
 def plans_keyboard(plans: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
     """Plans selection keyboard"""
     builder = InlineKeyboardBuilder()
-    
+
     for plan in plans:
         builder.row(
             InlineKeyboardButton(
@@ -28,11 +30,11 @@ def plans_keyboard(plans: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
                 callback_data=f"plan:{plan['id']}"
             )
         )
-    
+
     builder.row(
         InlineKeyboardButton(text="🔙 بازگشت", callback_data="back_to_main")
     )
-    
+
     return builder.as_markup()
 
 
@@ -56,18 +58,18 @@ def cancel_keyboard() -> ReplyKeyboardMarkup:
 def account_actions_keyboard(account_id: int, can_renew: bool = True) -> InlineKeyboardMarkup:
     """Actions for a VPN account"""
     builder = InlineKeyboardBuilder()
-    
+
     if can_renew:
         builder.row(
             InlineKeyboardButton(text="🔄 تمدید اکانت", callback_data=f"renew_account:{account_id}")
         )
-    
+
     builder.row(
         InlineKeyboardButton(text="📊 وضعیت اکانت", callback_data=f"check_status:{account_id}")
     )
-    
+
     builder.row(
         InlineKeyboardButton(text="🔙 بازگشت", callback_data="back_to_accounts")
     )
-    
+
     return builder.as_markup()

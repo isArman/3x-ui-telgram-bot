@@ -1,173 +1,59 @@
- # Telegram VPN Bot (3x-ui Integration)
- 
- A production-ready Telegram bot for selling VPN accounts via 3x-ui panel. Built with Python, Aiogram 3, and SQLAlchemy.
- 
- ## Features
- 
- - 📦 Pre-defined VPN plans with custom pricing
- - 🎨 Custom plan creation (user-defined days and traffic)
- - 💳 Payment receipt upload and admin review
- - ✅ Automatic config delivery from pre-stocked inventory on approval
- - 🔒 SQLite database with async support
- - 🐳 Docker-ready with docker-compose
- - 🔄 Restart-safe stateless design
- 
- ## Quick Start
- 
- ### 1. Clone and Configure
- 
- ```bash
- git clone <repository-url>
- cd 3x-ui-shop
- cp .env.example .env
- ```
- 
- Edit `.env` with your credentials:
- 
- ```env
- BOT_TOKEN=your_telegram_bot_token
- ADMIN_IDS=123456789,987654321
- XUI_URL=https://your-panel.example.com
- XUI_USERNAME=admin
- XUI_PASSWORD=password
- CARD_NUMBER=6037-9971-1234-5678
- CARD_HOLDER=John Doe
- ```
- 
- ### 2. Run with Docker
- 
- ```bash
- docker-compose up -d
- ```
- 
- ### 3. Check Logs
- 
- ```bash
- docker-compose logs -f bot
- ```
- 
- ## Project Structure
- 
- ```
- app/
- ├── bot/
- │   ├── handlers/          # User and admin handlers
- │   ├── keyboards/         # Telegram keyboards
- │   └── states/            # FSM states
- ├── config/
- │   ├── settings.py        # Environment configuration
- │   ├── plans.yaml         # VPN plans definition
- │   └── texts.py           # Bot messages (Persian)
- ├── database/
- │   ├── base.py            # SQLAlchemy base
- │   ├── session.py         # DB session management
- │   └── models.py          # Database models
- ├── xui/
- │   └── client.py          # 3x-ui API client
- ├── core/
- │   └── runner.py          # Bot runner
- └── main.py                # Entry point
- ```
- 
- ## Database Schema
- 
- - **users** - Telegram user information
- - **orders** - VPN plan orders
- - **payments** - Payment receipts and status
- - **vpn_accounts** - Created VPN accounts
- 
- ## User Flow
- 
- 1. User selects a plan or creates custom plan
- 2. Order is created with payment instructions
- 3. User uploads payment receipt
- 4. Admin reviews and approves/rejects payment
- 5. On approval, a pre-added config is sent to the user automatically
- 6. User receives subscription link or vless config
- 
-## Admin Flow
+# Telegram VPN Shop Bot
 
-Admins receive payment notifications with:
-- User information
-- Order details
-- Payment receipt
-- Approve/Reject buttons
+A Telegram bot for selling VPN subscriptions with manual config inventory. Built with Python, Aiogram 3, and SQLAlchemy.
 
-### Admin Commands
+## Features
+
+- Pre-defined VPN plans with custom pricing
+- Custom plan creation (user-defined days and traffic)
+- Payment receipt upload and admin review
+- Pre-stocked configs per plan — auto-sent on payment approval
+- SQLite database with async support
+- Docker-ready with docker-compose
+
+## Quick Start
+
+```bash
+git clone <repository-url>
+cd 3x-ui-telgram-bot
+cp .env.example .env
+```
+
+Edit `.env`:
+
+```env
+BOT_TOKEN=your_telegram_bot_token
+ADMIN_IDS=123456789
+CARD_NUMBER=6037-9971-1234-5678
+CARD_HOLDER=John Doe
+```
+
+```bash
+docker-compose up -d --build
+```
+
+## Admin
+
+Admins see **⚙️ پنل ادمین** in the main menu, or use:
 
 | Command | Description |
 |---------|-------------|
-| `/configs` | Manage pre-made configs per plan |
-| `/dashboard` | Statistics and config stock overview |
-| `/pending` | Pending payments list |
-| `/payments` | Payment history |
+| `/admin` | Admin panel menu |
+| `/configs` | Manage configs per plan |
+| `/dashboard` | Stats and inventory |
+| `/pending` | Pending payments |
 
-### Config inventory
+### Config workflow
 
-1. Create VPN configs manually in your panel
-2. Send `/configs` in Telegram (admin only)
-3. Tap **افزودن کانفیگ** and pick a plan (basic, standard, premium)
-4. Paste the subscription link or `vless://` config
-5. When a user buys that plan and you approve payment, the next free config is sent automatically
+1. Create VPN configs manually outside the bot
+2. Open **⚙️ پنل ادمین** → **مدیریت کانفیگ‌ها**
+3. Add subscription links or `vless://` configs to each plan
+4. Approve payments — next free config is sent to the user
 
-Custom plan orders still require pasting a config manually after approval.
- 
- ## Customization
- 
- ### Edit Plans
- 
- Edit `app/config/plans.yaml`:
- 
- ```yaml
- plans:
-   - id: basic
-     name: "پلن پایه"
-     days: 30
-     traffic: 50
-     price: 100000
- 
- pricing:
-   per_day: 1000    # Price per day
-   per_gb: 3000     # Price per GB
- ```
- 
- ### Edit Messages
- 
- Edit `app/config/texts.py` to customize bot messages.
- 
- ## Requirements
- 
- - Python 3.11+
- - Docker & Docker Compose
- - Telegram Bot Token
- 
- ## Development
- 
- ### Without Docker
- 
- ```bash
- python -m venv venv
- source venv/bin/activate
- pip install -r requirements.txt
- python -m app.main
- ```
- 
- ## Notes
- 
- - SQLite database is stored in `./data/db.sqlite3`
- - Bot uses FSM for multi-step flows
- - All timestamps are in UTC
- - VPN configs are managed manually via `/configs` and assigned on payment approval
- 
- ## Future Enhancements
- 
- Architecture supports:
- - Multiple server locations
- - PostgreSQL migration
- - Payment gateway integration
- - Auto-renewal system
- - Usage monitoring
- 
- ## License
- 
- MIT
+## Plans
+
+Edit `app/config/plans.yaml` to change plans and pricing.
+
+## License
+
+MIT

@@ -47,7 +47,7 @@ async def test_expiring_account_notification():
         vpn_account = VPNAccount(
             order_id=order.id,
             user_id=111111,
-            xui_client_id="expiring_test_uuid",
+            config_ref="expiring_test_uuid",
             subscription_path="https://test.com/sub",
             expires_at=datetime.utcnow() + timedelta(days=2),
             traffic_limit_gb=40,
@@ -94,7 +94,7 @@ async def test_already_notified_account():
         vpn_account = VPNAccount(
             order_id=order.id,
             user_id=222222,
-            xui_client_id="notified_uuid",
+            config_ref="notified_uuid",
             subscription_path="https://test.com/sub",
             expires_at=datetime.utcnow() + timedelta(days=2),
             traffic_limit_gb=40,
@@ -137,7 +137,7 @@ async def test_expired_account_not_notified():
         vpn_account = VPNAccount(
             order_id=order.id,
             user_id=333333,
-            xui_client_id="expired_uuid",
+            config_ref="expired_uuid",
             subscription_path="https://test.com/sub",
             expires_at=datetime.utcnow() - timedelta(days=1),  # Expired
             traffic_limit_gb=40,

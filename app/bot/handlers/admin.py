@@ -7,6 +7,7 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy import func, select
 
 from app.bot.keyboards.admin import (
+    admin_menu_keyboard,
     configs_menu_keyboard,
     payment_review_keyboard,
     plan_select_keyboard,
@@ -27,6 +28,22 @@ def is_admin(user_id: int) -> bool:
     return user_id in settings.ADMIN_IDS
 
 
+async def show_configs_menu(message: Message) -> None:
+    await message.answer(
+        "🗂 مدیریت کانفیگ‌های پلن\n\n"
+        "کانفیگ‌ها (لینک subscription یا vless://) را به هر پلن اضافه کنید.\n"
+        "پس از تایید پرداخت، یک کانفیگ آزاد به کاربر ارسال می‌شود.",
+        reply_markup=configs_menu_keyboard(),
+    )
+
+
+async def show_admin_menu(message: Message) -> None:
+    await message.answer(
+        "⚙️ پنل ادمین\n\nیک گزینه را انتخاب کنید:",
+        reply_markup=admin_menu_keyboard(),
+    )
+
+
 async def complete_payment_approval(
     session,
     payment: Payment,
@@ -43,7 +60,7 @@ async def complete_payment_approval(
     vpn_account = VPNAccount(
         order_id=order.id,
         user_id=order.user_id,
-        xui_client_id=str(plan_config_id) if plan_config_id else "manual",
+        config_ref=str(plan_config_id) if plan_config_id else "manual",
         subscription_path=config_text,
         expires_at=datetime.utcnow() + timedelta(days=order.days),
         traffic_limit_gb=order.traffic_gb,
@@ -63,27 +80,59 @@ async def send_config_to_user(bot, user_id: int, config_text: str) -> None:
 # --- Config inventory admin ---
 
 
-@router.message(Command("configs"))
-async def configs_menu(message: Message):
+@router.message(Command("admin"))
+@router.message(F.text == "⚙️ پنل ادمین")
+async def admin_menu(message: Message):
     if not is_admin(message.from_user.id):
         await message.answer("⛔ شما دسترسی ادمین ندارید.")
         return
+    await show_admin_menu(message)
 
-    await message.answer(
+
+@router.callback_query(F.data == "admin:menu")
+async def admin_menu_callback(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("دسترسی ندارید!", show_alert=True)
+        return
+    await callback.message.edit_text(
+        "⚙️ پنل ادمین\n\nیک گزینه را انتخاب کنید:",
+        reply_markup=admin_menu_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin:configs")
+async def admin_configs_callback(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("دسترسی ندارید!", show_alert=True)
+        return
+    await callback.message.edit_text(
         "🗂 مدیریت کانفیگ‌های پلن\n\n"
         "کانفیگ‌ها (لینک subscription یا vless://) را به هر پلن اضافه کنید.\n"
         "پس از تایید پرداخت، یک کانفیگ آزاد به کاربر ارسال می‌شود.",
         reply_markup=configs_menu_keyboard(),
     )
+    await callback.answer()
+
+
+@router.message(Command("configs"))
+async def configs_menu(message: Message):
+    if not is_admin(message.from_user.id):
+        await message.answer("⛔ شما دسترسی ادمین ندارید.")
+        return
+    await show_configs_menu(message)
 
 
 @router.callback_query(F.data == "configs:menu")
 async def configs_menu_callback(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
+        await callback.answer("دسترسی ندارید!", show_alert=True)
         return
 
     await callback.message.edit_text(
-        "🗂 مدیریت کانفیگ‌های پلن",
+        "🗂 مدیریت کانفیگ‌های پلن\n\n"
+        "کانفیگ‌ها (لینک subscription یا vless://) را به هر پلن اضافه کنید.\n"
+        "پس از تایید پرداخت، یک کانفیگ آزاد به کاربر ارسال می‌شود.",
         reply_markup=configs_menu_keyboard(),
     )
     await callback.answer()
@@ -349,6 +398,24 @@ async def reject_payment(callback: CallbackQuery):
         await callback.answer("پرداخت رد شد!", show_alert=True)
 
 
+@router.callback_query(F.data == "admin:dashboard")
+async def admin_dashboard_callback(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("دسترسی ندارید!", show_alert=True)
+        return
+    await show_dashboard(callback.message)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin:pending")
+async def admin_pending_callback(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("دسترسی ندارید!", show_alert=True)
+        return
+    await show_pending_payments(callback.message)
+    await callback.answer()
+
+
 @router.message(Command("dashboard"))
 async def show_dashboard(message: Message):
     from app.utils.statistics import get_dashboard_stats
@@ -373,7 +440,7 @@ async def show_dashboard(message: Message):
                 f"💳 اکانت فعال: {stats['active_accounts']}\n"
                 f"💰 درآمد کل: {stats['total_revenue']:,} تومان\n\n"
                 "📦 موجودی کانفیگ:\n" + "\n".join(stock_lines) + "\n\n"
-                "🗂 /configs — مدیریت کانفیگ‌ها"
+                "🗂 از منو «⚙️ پنل ادمین» کانفیگ‌ها را مدیریت کنید."
             )
     except Exception as exc:
         logger.error(f"Error showing dashboard: {exc}")

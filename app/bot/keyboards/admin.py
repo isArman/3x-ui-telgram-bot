@@ -11,6 +11,14 @@ def payment_review_keyboard(payment_id: int) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def admin_menu_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="🗂 مدیریت کانفیگ‌ها", callback_data="admin:configs"))
+    builder.row(InlineKeyboardButton(text="📊 داشبورد", callback_data="admin:dashboard"))
+    builder.row(InlineKeyboardButton(text="📋 پرداخت‌های در انتظار", callback_data="admin:pending"))
+    return builder.as_markup()
+
+
 def configs_menu_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(
@@ -18,6 +26,9 @@ def configs_menu_keyboard() -> InlineKeyboardMarkup:
     )
     builder.row(
         InlineKeyboardButton(text="➕ افزودن کانفیگ", callback_data="configs:add"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="🔙 بازگشت", callback_data="admin:menu"),
     )
     return builder.as_markup()
 

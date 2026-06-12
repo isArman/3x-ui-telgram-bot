@@ -33,10 +33,11 @@ async def main():
     storage = MemoryStorage()
     dp = Dispatcher(storage=storage)
 
-    dp.include_router(user.router)
     dp.include_router(admin.router)
+    dp.include_router(user.router)
 
     await on_startup()
+    app_logger.info(f"Admin IDs loaded: {settings.ADMIN_IDS}")
 
     scheduler_task = asyncio.create_task(run_notification_scheduler(bot))
     app_logger.info("Notification scheduler started")

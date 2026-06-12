@@ -101,7 +101,7 @@ async def test_create_vpn_account():
         vpn_account = VPNAccount(
             order_id=order.id,
             user_id=123456,
-            xui_client_id="uuid-123",
+            config_ref="uuid-123",
             subscription_path="https://example.com/sub/uuid-123",
             expires_at=datetime.utcnow() + timedelta(days=30),
             traffic_limit_gb=40,
@@ -130,7 +130,7 @@ async def test_vpn_account_notification_fields():
         vpn = VPNAccount(
             order_id=order.id,
             user_id=123,
-            xui_client_id="test",
+            config_ref="test",
             subscription_path="https://test.com",
             expires_at=datetime.utcnow() + timedelta(days=2),
             traffic_limit_gb=40
