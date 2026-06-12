@@ -85,13 +85,31 @@
  5. On approval, VPN account is automatically created
  6. User receives subscription link
  
- ## Admin Flow
- 
- Admins receive payment notifications with:
- - User information
- - Order details
- - Payment receipt
- - Approve/Reject buttons
+## Admin Flow
+
+Admins receive payment notifications with:
+- User information
+- Order details
+- Payment receipt
+- Approve/Reject buttons
+
+### Admin Commands
+
+| Command | Description |
+|---------|-------------|
+| `/dashboard` | Statistics overview |
+| `/pending` | Pending payments list |
+| `/payments` | Payment history |
+| `/panel` | Configure 3x-ui panel and auto account creation |
+
+### 3x-ui Panel Setup
+
+1. Send `/panel` in Telegram (admin only)
+2. Set panel URL, username, password, and inbound ID
+3. Tap **Test connection** to verify login and inbound
+4. Enable **Auto create** — on payment approval, the bot creates a client via [3x-ui API](https://github.com/MHSanaei/3x-ui/wiki) and sends the subscription link to the user
+
+If auto create is disabled, the admin manually pastes the subscription link after approval (previous behavior).
  
  ## Customization
  

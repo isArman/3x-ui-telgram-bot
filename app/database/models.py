@@ -58,3 +58,18 @@ class VPNAccount(Base):
     last_renewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class PanelConfig(Base):
+    """Single-row 3x-ui panel configuration (id=1)."""
+
+    __tablename__ = "panel_config"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    url: Mapped[str] = mapped_column(String(500), default="")
+    username: Mapped[str] = mapped_column(String(255), default="")
+    password: Mapped[str] = mapped_column(String(255), default="")
+    inbound_id: Mapped[int] = mapped_column(Integer, default=1)
+    auto_create: Mapped[bool] = mapped_column(Boolean, default=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_by: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
