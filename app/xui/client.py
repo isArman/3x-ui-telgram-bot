@@ -18,8 +18,10 @@ class XUIClient:
         username: str,
         password: str,
         inbound_id: int = 1,
+        public_base_url: Optional[str] = None,
     ):
         self.base_url = base_url.rstrip("/")
+        self.public_base_url = (public_base_url or base_url).rstrip("/")
         self.username = username
         self.password = password
         self.inbound_id = inbound_id
@@ -173,8 +175,8 @@ class XUIClient:
             return None
 
     def build_subscription_url(self, sub_id: str) -> str:
-        """Build full subscription URL from panel base URL and subId."""
-        return f"{self.base_url}/sub/{sub_id}"
+        """Build full subscription URL using the public panel base URL."""
+        return f"{self.public_base_url}/sub/{sub_id}"
 
     async def get_client_traffic(self, email: str) -> Optional[Dict[str, Any]]:
         """Get client traffic stats."""

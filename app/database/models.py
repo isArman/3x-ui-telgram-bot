@@ -67,9 +67,33 @@ class PanelConfig(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
     url: Mapped[str] = mapped_column(String(500), default="")
+    public_url: Mapped[str] = mapped_column(String(500), default="")
     username: Mapped[str] = mapped_column(String(255), default="")
     password: Mapped[str] = mapped_column(String(255), default="")
     inbound_id: Mapped[int] = mapped_column(Integer, default=1)
     auto_create: Mapped[bool] = mapped_column(Boolean, default=False)
+    provision_mode: Mapped[str] = mapped_column(String(20), default="direct")  # direct | remote
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     updated_by: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+
+
+class ProvisionJob(Base):
+    """Queued VPN account creation for remote worker (Iran server)."""
+
+    __tablename__ = "provision_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    payment_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    order_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    days: Mapped[int] = mapped_column(Integer, nullable=False)
+    traffic_gb: Mapped[int] = mapped_column(Integer, nullable=False)
+    admin_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="pending")  # pending, processing, completed, failed
+    xui_client_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    subscription_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    notified: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)

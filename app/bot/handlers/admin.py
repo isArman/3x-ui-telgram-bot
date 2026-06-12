@@ -14,6 +14,7 @@ from app.database.session import AsyncSessionLocal
 from app.utils.logger import logger
 from app.xui.service import (
     build_xui_client,
+    create_provision_job,
     get_effective_panel_config,
     get_or_create_panel_config,
     provision_vpn_account,
@@ -39,17 +40,25 @@ async def format_panel_status(session) -> str:
     config = await get_effective_panel_config(session)
     auto_status = "فعال ✅" if config.auto_create else "غیرفعال ⏸"
     configured = "بله ✅" if config.is_configured else "خیر ❌"
+    mode_label = "Remote (worker ایران)" if config.is_remote_mode else "Direct (از همین سرور)"
 
     return (
         "⚙️ تنظیمات پنل 3x-ui\n\n"
-        f"🌐 URL: {config.url or 'تنظیم نشده'}\n"
+        f"🌍 حالت: {mode_label}\n"
+        f"🌐 URL عمومی (subscription): {config.public_url or 'تنظیم نشده'}\n"
+        f"🔧 URL API (direct): {config.url or 'تنظیم نشده'}\n"
         f"👤 نام کاربری: {config.username or 'تنظیم نشده'}\n"
         f"🔑 رمز عبور: {mask_password(config.password)}\n"
         f"📡 Inbound ID: {config.inbound_id}\n"
         f"🔗 پنل کامل: {configured}\n"
         f"🤖 ساخت خودکار اکانت: {auto_status}\n\n"
-        "با دکمه‌های زیر می‌توانید پنل را تنظیم کنید."
+        "Remote: bot در آلمان + worker روی سرور ایران (localhost)\n"
+        "Direct: bot مستقیم به API پنل وصل می‌شود."
     )
+
+
+def panel_keyboard(config):
+    return panel_config_keyboard(config.auto_create, config.provision_mode)
 
 
 async def complete_payment_approval(
@@ -88,7 +97,21 @@ async def show_panel_config(message: Message):
         await get_or_create_panel_config(session)
         text = await format_panel_status(session)
         config = await get_effective_panel_config(session)
-        await message.answer(text, reply_markup=panel_config_keyboard(config.auto_create))
+        await message.answer(text, reply_markup=panel_keyboard(config))
+
+
+@router.callback_query(F.data == "panel:set_public_url")
+async def panel_set_public_url(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("شما دسترسی ندارید!", show_alert=True)
+        return
+
+    await state.set_state(AdminStates.waiting_for_panel_public_url)
+    await callback.message.answer(
+        "🌐 URL عمومی پنل را ارسال کنید (برای لینک subscription کاربران).\n\n"
+        "مثال: https://poloiians.faghat5k.ir:2053/YJBJbvcdMmIAnCYoAN"
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data == "panel:set_url")
@@ -99,8 +122,8 @@ async def panel_set_url(callback: CallbackQuery, state: FSMContext):
 
     await state.set_state(AdminStates.waiting_for_panel_url)
     await callback.message.answer(
-        "🌐 URL پنل 3x-ui را ارسال کنید.\n\n"
-        "مثال: https://panel.example.com:2053"
+        "🔧 URL API پنل را ارسال کنید (فقط حالت Direct).\n\n"
+        "مثال: https://panel.example.com:2053/path"
     )
     await callback.answer()
 
@@ -149,7 +172,11 @@ async def panel_toggle_auto(callback: CallbackQuery):
         config = await get_effective_panel_config(session)
 
         if not config.is_configured:
-            await callback.answer("ابتدا URL، نام کاربری و رمز عبور را تنظیم کنید.", show_alert=True)
+            await callback.answer("ابتدا نام کاربری و رمز عبور را تنظیم کنید.", show_alert=True)
+            return
+
+        if config.is_remote_mode and not config.public_url:
+            await callback.answer("در حالت Remote ابتدا URL عمومی را تنظیم کنید.", show_alert=True)
             return
 
         panel.auto_create = not panel.auto_create
@@ -158,9 +185,28 @@ async def panel_toggle_auto(callback: CallbackQuery):
 
         config = await get_effective_panel_config(session)
         text = await format_panel_status(session)
-        await callback.message.edit_text(text, reply_markup=panel_config_keyboard(config.auto_create))
+        await callback.message.edit_text(text, reply_markup=panel_keyboard(config))
         status = "فعال" if config.auto_create else "غیرفعال"
         await callback.answer(f"ساخت خودکار {status} شد.")
+
+
+@router.callback_query(F.data == "panel:toggle_mode")
+async def panel_toggle_mode(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("شما دسترسی ندارید!", show_alert=True)
+        return
+
+    async with AsyncSessionLocal() as session:
+        panel = await get_or_create_panel_config(session)
+        panel.provision_mode = "remote" if panel.provision_mode != "remote" else "direct"
+        panel.updated_by = callback.from_user.id
+        await session.commit()
+
+        config = await get_effective_panel_config(session)
+        text = await format_panel_status(session)
+        await callback.message.edit_text(text, reply_markup=panel_keyboard(config))
+        mode = "Remote" if config.is_remote_mode else "Direct"
+        await callback.answer(f"حالت {mode} فعال شد.")
 
 
 @router.callback_query(F.data == "panel:test_connection")
@@ -173,6 +219,18 @@ async def panel_test_connection(callback: CallbackQuery):
         config = await get_effective_panel_config(session)
         if not config.is_configured:
             await callback.answer("پنل هنوز تنظیم نشده است.", show_alert=True)
+            return
+
+        if config.is_remote_mode:
+            await callback.message.answer(
+                "ℹ️ در حالت Remote، تست اتصال باید روی سرور worker (ایران) انجام شود.\n"
+                "دستور: `python -m app.worker.main` با XUI_URL=http://127.0.0.1:..."
+            )
+            await callback.answer("Remote mode")
+            return
+
+        if not config.url:
+            await callback.answer("ابتدا URL API را تنظیم کنید.", show_alert=True)
             return
 
         client = build_xui_client(config)
@@ -204,7 +262,31 @@ async def receive_panel_url(message: Message, state: FSMContext):
         config = await get_effective_panel_config(session)
         await message.answer(
             f"✅ URL ذخیره شد.\n\n{await format_panel_status(session)}",
-            reply_markup=panel_config_keyboard(config.auto_create),
+            reply_markup=panel_keyboard(config),
+        )
+
+    await state.clear()
+
+
+@router.message(AdminStates.waiting_for_panel_public_url)
+async def receive_panel_public_url(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+
+    url = message.text.strip().rstrip("/")
+    if not url.startswith(("http://", "https://")):
+        await message.answer("❌ URL باید با http:// یا https:// شروع شود.")
+        return
+
+    async with AsyncSessionLocal() as session:
+        panel = await get_or_create_panel_config(session)
+        panel.public_url = url
+        panel.updated_by = message.from_user.id
+        await session.commit()
+        config = await get_effective_panel_config(session)
+        await message.answer(
+            f"✅ URL عمومی ذخیره شد.\n\n{await format_panel_status(session)}",
+            reply_markup=panel_keyboard(config),
         )
 
     await state.clear()
@@ -228,7 +310,7 @@ async def receive_panel_username(message: Message, state: FSMContext):
         config = await get_effective_panel_config(session)
         await message.answer(
             f"✅ نام کاربری ذخیره شد.\n\n{await format_panel_status(session)}",
-            reply_markup=panel_config_keyboard(config.auto_create),
+            reply_markup=panel_keyboard(config),
         )
 
     await state.clear()
@@ -252,7 +334,7 @@ async def receive_panel_password(message: Message, state: FSMContext):
         config = await get_effective_panel_config(session)
         await message.answer(
             f"✅ رمز عبور ذخیره شد.\n\n{await format_panel_status(session)}",
-            reply_markup=panel_config_keyboard(config.auto_create),
+            reply_markup=panel_keyboard(config),
         )
 
     await state.clear()
@@ -279,7 +361,7 @@ async def receive_panel_inbound_id(message: Message, state: FSMContext):
         config = await get_effective_panel_config(session)
         await message.answer(
             f"✅ Inbound ID ذخیره شد.\n\n{await format_panel_status(session)}",
-            reply_markup=panel_config_keyboard(config.auto_create),
+            reply_markup=panel_keyboard(config),
         )
 
     await state.clear()
@@ -316,6 +398,46 @@ async def approve_payment(callback: CallbackQuery, state: FSMContext):
         config = await get_effective_panel_config(session)
 
         if config.can_auto_create:
+            if config.is_remote_mode:
+                if not settings.WORKER_SECRET:
+                    await callback.answer("WORKER_SECRET تنظیم نشده!", show_alert=True)
+                    await callback.message.answer(
+                        "❌ برای حالت Remote باید WORKER_SECRET در .env سرور bot تنظیم شود."
+                    )
+                    return
+
+                payment.status = "processing"
+                await session.commit()
+
+                job = await create_provision_job(
+                    session,
+                    payment_id=payment.id,
+                    order_id=order.id,
+                    user_id=order.user_id,
+                    days=order.days,
+                    traffic_gb=order.traffic_gb,
+                    admin_id=callback.from_user.id,
+                )
+
+                await callback.message.answer(
+                    "✅ پرداخت تایید شد و در صف worker ایران قرار گرفت.\n\n"
+                    f"🆔 Job #{job.id}\n"
+                    f"👤 کاربر: {order.user_id}\n"
+                    f"⏱ {order.days} روز | 📊 {order.traffic_gb} GB\n\n"
+                    "پس از ساخت اکانت توسط worker، لینک به کاربر ارسال می‌شود."
+                )
+
+                try:
+                    await callback.message.edit_caption(
+                        caption=(callback.message.caption or "") + "\n\n⏳ در صف worker"
+                    )
+                except Exception:
+                    pass
+
+                await callback.answer("در صف worker")
+                logger.info(f"Queued provision job {job.id} for order {order.id}")
+                return
+
             provision_result, error = await provision_vpn_account(
                 session,
                 user_id=order.user_id,
