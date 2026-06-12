@@ -32,6 +32,21 @@ CARD_HOLDER=John Doe
 docker-compose up -d --build
 ```
 
+Or use the deploy script (recommended on server):
+
+```bash
+chmod +x scripts/deploy.sh
+./scripts/deploy.sh
+```
+
+After deploy, logs should show: `Admin IDs loaded: [your_id]`
+
+**Important:** `.env` lines must NOT have leading spaces:
+```env
+ADMIN_IDS=45963071
+```
+Not ` ADMIN_IDS=45963071` — Docker will ignore those variables.
+
 ## Admin
 
 Admins see **⚙️ پنل ادمین** in the main menu, or use:

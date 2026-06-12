@@ -5,13 +5,9 @@ services:
     build: .
     container_name: vpn_bot
     restart: always
-
+    env_file:
+      - .env
     environment:
-      - BOT_TOKEN=${BOT_TOKEN}
-      - ADMIN_IDS=${ADMIN_IDS}
       - DATABASE_URL=sqlite+aiosqlite:///data/db.sqlite3
-      - CARD_NUMBER=${CARD_NUMBER}
-      - CARD_HOLDER=${CARD_HOLDER}
-
     volumes:
       - ./data:/app/data
