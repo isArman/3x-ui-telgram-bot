@@ -6,6 +6,8 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from app.config.settings import settings
 from app.database.session import init_db
 from app.bot.handlers import user, admin
+from app.utils.logger import logger as app_logger
+from app.utils.scheduler import run_notification_scheduler
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -40,10 +42,17 @@ async def main():
     # Startup
     await on_startup()
     
+    # Start notification scheduler in background
+    scheduler_task = asyncio.create_task(run_notification_scheduler(bot))
+    app_logger.info("Notification scheduler started")
+    
     try:
         logger.info("Starting bot polling...")
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
+        # Cancel scheduler on shutdown
+        scheduler_task.cancel()
+        app_logger.info("Notification scheduler stopped")
         await on_shutdown()
         await bot.session.close()
 

@@ -16,7 +16,8 @@ from app.bot.keyboards.user import (
     main_menu_keyboard,
     plans_keyboard,
     confirm_order_keyboard,
-    cancel_keyboard
+    cancel_keyboard,
+    account_actions_keyboard
 )
 
 router = Router()
@@ -166,12 +167,45 @@ async def custom_plan_traffic(message: Message, state: FSMContext):
 @router.callback_query(F.data == "confirm_order")
 async def confirm_order(callback: CallbackQuery, state: FSMContext):
     """Confirm and create order"""
+    from app.utils.logger import logger
+    from app.utils.rate_limiter import rate_limiter
+    
+    # Rate limiting - 1 order per 60 seconds
+    can_proceed, remaining = rate_limiter.check_limit(
+        callback.from_user.id, 
+        "create_order", 
+        seconds=60
+    )
+    
+    if not can_proceed:
+        await callback.answer(
+            f"لطفاً {remaining} ثانیه صبر کنید قبل از ایجاد سفارش جدید.",
+            show_alert=True
+        )
+        logger.warning(f"User {callback.from_user.id} hit rate limit for order creation")
+        return
+    
     data = await state.get_data()
     
-    async with AsyncSessionLocal() as session:
-        # Create order
-        order = Order(
-            user_id=callback.from_user.id,
+    try:
+        async with AsyncSessionLocal() as session:
+            # Ensure user exists
+            user_result = await session.execute(select(User).where(User.id == callback.from_user.id))
+            user = user_result.scalar_one_or_none()
+            
+            if not user:
+                user = User(
+                    id=callback.from_user.id,
+                    username=callback.from_user.username,
+                    first_name=callback.from_user.first_name,
+                    last_name=callback.from_user.last_name
+                )
+                session.add(user)
+                await session.flush()
+            
+            # Create order
+            order = Order(
+                user_id=callback.from_user.id,
             days=data["days"],
             traffic_gb=data["traffic"],
             price=data["price"],
@@ -192,9 +226,20 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext):
             )
         )
         
-        # Set state to wait for receipt
-        await state.update_data(order_id=order.id)
-        await state.set_state(PaymentStates.waiting_for_receipt)
+            # Set state to wait for receipt
+            await state.update_data(order_id=order.id)
+            await state.set_state(PaymentStates.waiting_for_receipt)
+            
+            logger.info(f"Order {order.id} created by user {callback.from_user.id}")
+    
+    except Exception as e:
+        logger.error(f"Error creating order for user {callback.from_user.id}: {e}")
+        await callback.message.edit_text(
+            "خطایی در ایجاد سفارش رخ داد. لطفاً دوباره تلاش کنید.",
+            reply_markup=main_menu_keyboard()
+        )
+        await state.clear()
+        return
     
     await callback.answer()
 
@@ -313,3 +358,64 @@ async def my_orders(message: Message):
             ) + "\n"
         
         await message.answer(text)
+
+
+@router.message(F.text == "💳 اکانت‌های من")
+async def my_accounts(message: Message):
+    """Show user's VPN accounts"""
+    from app.utils.logger import logger
+    from app.database.models import VPNAccount
+    from datetime import datetime
+    
+    try:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(VPNAccount)
+                .where(VPNAccount.user_id == message.from_user.id)
+                .order_by(VPNAccount.created_at.desc())
+            )
+            accounts = result.scalars().all()
+            
+            if not accounts:
+                await message.answer(
+                    "شما هنوز هیچ اکانتی ندارید.\n\n"
+                    "برای خرید اکانت جدید از منو 'خرید پلن' استفاده کنید.",
+                    reply_markup=main_menu_keyboard()
+                )
+                return
+            
+            now = datetime.utcnow()
+            text = "💳 اکانت‌های شما:\n\n"
+            
+            for account in accounts:
+                order_result = await session.execute(
+                    select(Order).where(Order.id == account.order_id)
+                )
+                order = order_result.scalar_one_or_none()
+                
+                is_expired = account.expires_at < now
+                days_left = (account.expires_at - now).days if not is_expired else 0
+                
+                status = "🟢 فعال" if not is_expired and account.is_active else "🔴 منقضی شده"
+                
+                text += (
+                    f"🆔 شماره سفارش: #{account.order_id}\n"
+                    f"📊 حجم: {account.traffic_limit_gb} گیگابایت\n"
+                    f"⏱ روزهای باقیمانده: {days_left} روز\n"
+                    f"📅 تاریخ انقضا: {account.expires_at.strftime('%Y-%m-%d')}\n"
+                    f"وضعیت: {status}\n"
+                    f"🔗 لینک اشتراک:\n`{account.subscription_path}`\n"
+                    f"{'─' * 30}\n\n"
+                )
+            
+            text += "برای تمدید اکانت با ادمین تماس بگیرید."
+            
+            await message.answer(text, parse_mode="Markdown")
+            logger.info(f"User {message.from_user.id} viewed their accounts")
+            
+    except Exception as e:
+        logger.error(f"Error showing accounts for user {message.from_user.id}: {e}")
+        await message.answer(
+            "خطایی رخ داد. لطفاً دوباره تلاش کنید.",
+            reply_markup=main_menu_keyboard()
+        )

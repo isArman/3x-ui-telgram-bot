@@ -181,3 +181,143 @@ async def reject_payment(callback: CallbackQuery):
            caption=callback.message.caption + "\n\n❌ رد شد توسط ادمین"
        )
        await callback.answer("پرداخت رد شد!", show_alert=True)
+
+
+@router.message(F.text == "/dashboard")
+async def show_dashboard(message: Message):
+    """Show admin dashboard with statistics"""
+    from app.utils.logger import logger
+    from app.utils.statistics import get_dashboard_stats
+    
+    if not is_admin(message.from_user.id):
+        return
+    
+    try:
+        async with AsyncSessionLocal() as session:
+            stats = await get_dashboard_stats(session)
+            
+            dashboard_text = (
+                "📊 داشبورد مدیریت\n\n"
+                "👥 کاربران و سفارشات:\n"
+                f"• کل کاربران: {stats['total_users']}\n"
+                f"• کل سفارشات: {stats['total_orders']}\n"
+                f"• سفارشات امروز: {stats['today_orders']}\n"
+                f"• پرداخت‌های در انتظار: {stats['pending_payments']}\n\n"
+                "💳 اکانت‌ها:\n"
+                f"• اکانت‌های فعال: {stats['active_accounts']}\n"
+                f"• در حال انقضا (3 روز): {stats['expiring_soon']}\n\n"
+                "💰 درآمد:\n"
+                f"• امروز: {stats['today_revenue']:,} تومان\n"
+                f"• هفته اخیر: {stats['weekly_revenue']:,} تومان\n"
+                f"• ماه اخیر: {stats['monthly_revenue']:,} تومان\n"
+                f"• کل: {stats['total_revenue']:,} تومان\n"
+            )
+            
+            await message.answer(dashboard_text)
+            logger.info(f"Admin {message.from_user.id} viewed dashboard")
+            
+    except Exception as e:
+        logger.error(f"Error showing dashboard: {e}")
+        await message.answer("خطا در نمایش داشبورد!")
+
+
+@router.message(F.text == "/pending")
+async def show_pending_payments(message: Message):
+    """Show all pending payments with bulk actions"""
+    from app.utils.logger import logger
+    
+    if not is_admin(message.from_user.id):
+        return
+    
+    try:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(Payment)
+                .where(Payment.status == "pending")
+                .order_by(Payment.created_at.desc())
+                .limit(10)
+            )
+            payments = result.scalars().all()
+            
+            if not payments:
+                await message.answer("هیچ پرداخت در انتظاری وجود ندارد.")
+                return
+            
+            text = "📋 پرداخت‌های در انتظار:\n\n"
+            
+            for payment in payments:
+                order_result = await session.execute(
+                    select(Order).where(Order.id == payment.order_id)
+                )
+                order = order_result.scalar_one_or_none()
+                
+                if order:
+                    text += (
+                        f"🆔 پرداخت #{payment.id}\n"
+                        f"👤 کاربر: {payment.user_id}\n"
+                        f"📦 سفارش: {order.days} روز، {order.traffic_gb} گیگ\n"
+                        f"💰 مبلغ: {order.price:,} تومان\n"
+                        f"📅 {payment.created_at.strftime('%Y-%m-%d %H:%M')}\n"
+                        f"{'─' * 30}\n"
+                    )
+            
+            await message.answer(text)
+            logger.info(f"Admin {message.from_user.id} viewed pending payments")
+            
+    except Exception as e:
+        logger.error(f"Error showing pending payments: {e}")
+        await message.answer("خطا در نمایش پرداخت‌ها!")
+
+
+@router.message(F.text == "/payments")
+async def show_payment_history(message: Message):
+    """Show payment history"""
+    from app.utils.logger import logger
+    
+    if not is_admin(message.from_user.id):
+        return
+    
+    try:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(Payment)
+                .order_by(Payment.created_at.desc())
+                .limit(20)
+            )
+            payments = result.scalars().all()
+            
+            if not payments:
+                await message.answer("هیچ پرداختی یافت نشد.")
+                return
+            
+            text = "📜 تاریخچه پرداخت‌ها (20 تای آخر):\n\n"
+            
+            status_map = {
+                "pending": "⏳ در انتظار",
+                "approved": "✅ تایید شده",
+                "rejected": "❌ رد شده"
+            }
+            
+            for payment in payments:
+                order_result = await session.execute(
+                    select(Order).where(Order.id == payment.order_id)
+                )
+                order = order_result.scalar_one_or_none()
+                
+                status = status_map.get(payment.status, payment.status)
+                
+                if order:
+                    text += (
+                        f"🆔 #{payment.id} - {status}\n"
+                        f"👤 کاربر: {payment.user_id}\n"
+                        f"💰 {order.price:,} تومان\n"
+                        f"📅 {payment.created_at.strftime('%Y-%m-%d')}\n"
+                        f"{'─' * 25}\n"
+                    )
+            
+            await message.answer(text)
+            logger.info(f"Admin {message.from_user.id} viewed payment history")
+            
+    except Exception as e:
+        logger.error(f"Error showing payment history: {e}")
+        await message.answer("خطا در نمایش تاریخچه!")

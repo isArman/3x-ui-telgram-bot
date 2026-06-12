@@ -47,7 +47,15 @@
  
  # Logs
  *.log
- 
- # OS
- .DS_Store
- Thumbs.db
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+.pytest_cache/
+htmlcov/
+.coverage
+*.cover
+.hypothesis/
+*.log

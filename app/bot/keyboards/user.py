@@ -11,7 +11,8 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
         KeyboardButton(text="🎨 پلن سفارشی")
     )
     builder.row(
-        KeyboardButton(text="📋 سفارش‌های من")
+        KeyboardButton(text="📋 سفارش‌های من"),
+        KeyboardButton(text="💳 اکانت‌های من")
     )
     return builder.as_markup(resize_keyboard=True)
 
@@ -50,3 +51,23 @@ def cancel_keyboard() -> ReplyKeyboardMarkup:
     builder = ReplyKeyboardBuilder()
     builder.row(KeyboardButton(text="❌ لغو"))
     return builder.as_markup(resize_keyboard=True)
+
+
+def account_actions_keyboard(account_id: int, can_renew: bool = True) -> InlineKeyboardMarkup:
+    """Actions for a VPN account"""
+    builder = InlineKeyboardBuilder()
+    
+    if can_renew:
+        builder.row(
+            InlineKeyboardButton(text="🔄 تمدید اکانت", callback_data=f"renew_account:{account_id}")
+        )
+    
+    builder.row(
+        InlineKeyboardButton(text="📊 وضعیت اکانت", callback_data=f"check_status:{account_id}")
+    )
+    
+    builder.row(
+        InlineKeyboardButton(text="🔙 بازگشت", callback_data="back_to_accounts")
+    )
+    
+    return builder.as_markup()
