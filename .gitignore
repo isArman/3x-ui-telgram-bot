@@ -37,8 +37,10 @@
  *.swo
  *~
  
- # Environment variables
- .env
+# Environment variables (never commit — use .env.example as template)
+.env
+.env.local
+.env.*.local
  
  # Database
  data/

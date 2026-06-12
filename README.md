@@ -23,10 +23,13 @@ Edit `.env`:
 
 ```env
 BOT_TOKEN=your_telegram_bot_token
-ADMIN_IDS=123456789
+ADMIN_IDS=45963071,5821190149
 CARD_NUMBER=6037-9971-1234-5678
 CARD_HOLDER=John Doe
 ```
+
+**Multiple admins:** add Telegram user IDs separated by commas (no spaces required):
+`ADMIN_IDS=45963071,5821190149`
 
 ```bash
 docker-compose up -d --build
