@@ -206,15 +206,15 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext):
             # Create order
             order = Order(
                 user_id=callback.from_user.id,
-            days=data["days"],
-            traffic_gb=data["traffic"],
-            price=data["price"],
-            status="pending"
-        )
-        session.add(order)
-        await session.commit()
-        await session.refresh(order)
-        
+                days=data["days"],
+                traffic_gb=data["traffic"],
+                price=data["price"],
+                status="pending"
+            )
+            session.add(order)
+            await session.commit()
+            await session.refresh(order)
+
         # Send payment instructions
         await callback.message.edit_text(
             get_text(
@@ -225,12 +225,12 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext):
                 card_holder=settings.CARD_HOLDER
             )
         )
-        
-            # Set state to wait for receipt
-            await state.update_data(order_id=order.id)
-            await state.set_state(PaymentStates.waiting_for_receipt)
-            
-            logger.info(f"Order {order.id} created by user {callback.from_user.id}")
+
+        # Set state to wait for receipt
+        await state.update_data(order_id=order.id)
+        await state.set_state(PaymentStates.waiting_for_receipt)
+
+        logger.info(f"Order {order.id} created by user {callback.from_user.id}")
     
     except Exception as e:
         logger.error(f"Error creating order for user {callback.from_user.id}: {e}")
