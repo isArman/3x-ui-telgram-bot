@@ -6,7 +6,7 @@ from typing import List
 class Settings:
     # Bot
     BOT_TOKEN: str = os.getenv("BOT_TOKEN", "")
-    
+
     @property
     def ADMIN_IDS(self) -> List[int]:
         admin_ids_str = os.getenv("ADMIN_IDS", "")
@@ -19,19 +19,9 @@ class Settings:
 
     # 3x-ui Panel
     XUI_URL: str = os.getenv("XUI_URL", "")
-    XUI_PUBLIC_URL: str = os.getenv("XUI_PUBLIC_URL", "")
     XUI_USERNAME: str = os.getenv("XUI_USERNAME", "")
     XUI_PASSWORD: str = os.getenv("XUI_PASSWORD", "")
     XUI_INBOUND_ID: int = int(os.getenv("XUI_INBOUND_ID", "1"))
-    PROVISION_MODE: str = os.getenv("PROVISION_MODE", "direct")  # direct | remote
-
-    # Remote worker API (bot server exposes this; Iran worker polls it)
-    WORKER_SECRET: str = os.getenv("WORKER_SECRET", "")
-    WORKER_API_HOST: str = os.getenv("WORKER_API_HOST", "0.0.0.0")
-    WORKER_API_PORT: int = int(os.getenv("WORKER_API_PORT", "8080"))
-
-    # Remote worker client (runs on Iran server next to 3x-ui)
-    BOT_API_URL: str = os.getenv("BOT_API_URL", "")
 
     # Payment
     CARD_NUMBER: str = os.getenv("CARD_NUMBER", "")
@@ -50,7 +40,7 @@ class Settings:
             "CARD_NUMBER": cls.CARD_NUMBER,
             "CARD_HOLDER": cls.CARD_HOLDER,
         }
-        
+
         missing = [k for k, v in required.items() if not v]
         if missing:
             raise ValueError(f"Missing required settings: {', '.join(missing)}")

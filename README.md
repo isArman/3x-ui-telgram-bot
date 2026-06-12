@@ -104,29 +104,12 @@ Admins receive payment notifications with:
 
 ### 3x-ui Panel Setup
 
-**Recommended for bot outside Iran (Germany) + panel in Iran:**
+1. Send `/panel` in Telegram (admin only)
+2. Set panel URL, username, password, and inbound ID
+3. Tap **Test connection** to verify login and inbound
+4. Enable **Auto create** — on payment approval, the bot creates a client via [3x-ui API](https://github.com/MHSanaei/3x-ui/wiki) and sends the subscription link to the user
 
-```
-Bot (Germany)  ←Telegram→  Users
-     ↑ HTTP poll (outbound from Iran)
-Worker (Iran, localhost)  →  3x-ui panel
-```
-
-1. **Germany server** — run bot with `PROVISION_MODE=remote` and `WORKER_SECRET`
-2. **Iran server** — run worker: `docker compose --profile worker up -d worker`
-3. In Telegram `/panel`:
-   - Set mode to **Remote**
-   - Set **URL عمومی** (public subscription URL)
-   - Set username, password, inbound ID
-   - Enable **Auto create**
-4. Worker env on Iran:
-   - `BOT_API_URL=https://your-germany-ip:8080`
-   - `WORKER_SECRET` (same as bot)
-   - `WORKER_XUI_URL=http://127.0.0.1:2053/your-path`
-
-On payment approval, bot queues a job; worker creates the client via localhost API and user receives the subscription link.
-
-**Direct mode** (bot and panel on same network): set mode to Direct, configure API URL, test connection from `/panel`.
+If auto create is disabled, the admin manually pastes the subscription link after approval (previous behavior).
  
  ## Customization
  
