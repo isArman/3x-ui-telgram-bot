@@ -198,10 +198,11 @@ async def configs_receive_text(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
 
-    config_text = message.text.strip()
-    if not config_text:
-        await message.answer("❌ متن کانفیگ نمی‌تواند خالی باشد.")
+    if not message.text or not message.text.strip():
+        await message.answer("❌ لطفاً لینک/متن کانفیگ را به صورت متن ارسال کنید.")
         return
+
+    config_text = message.text.strip()
 
     data = await state.get_data()
     plan_id = data.get("config_plan_id")
@@ -290,7 +291,6 @@ async def approve_payment(callback: CallbackQuery, state: FSMContext):
                 return
 
             plan_name = plan["name"] if plan else order.plan_id
-            await callback.answer("موجودی کانفیگ تمام شده!", show_alert=True)
             await callback.message.answer(
                 f"⚠️ برای پلن «{plan_name}» کانفیگ آزاد وجود ندارد.\n"
                 f"از /configs کانفیگ اضافه کنید یا لینک را دستی ارسال کنید."
@@ -318,6 +318,10 @@ async def receive_subscription(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
 
+    if not message.text or not message.text.strip():
+        await message.answer("❌ لطفاً لینک/کانفیگ را به صورت متن ارسال کنید.")
+        return
+
     config_text = message.text.strip()
     data = await state.get_data()
     payment_id = data.get("payment_id")
@@ -331,6 +335,11 @@ async def receive_subscription(message: Message, state: FSMContext):
 
         if not payment or not order:
             await message.answer("❌ خطا: سفارش یا پرداخت یافت نشد!")
+            await state.clear()
+            return
+
+        if payment.status != "pending":
+            await message.answer("❌ این پرداخت قبلاً بررسی شده است.")
             await state.clear()
             return
 

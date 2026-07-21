@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   bot:
     build: .
@@ -11,3 +9,4 @@ services:
       - DATABASE_URL=sqlite+aiosqlite:///data/db.sqlite3
     volumes:
       - ./data:/app/data
+      - ./app/config/plans.yaml:/app/app/config/plans.yaml:ro

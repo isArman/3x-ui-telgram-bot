@@ -86,7 +86,8 @@ async def select_plan(callback: CallbackQuery, state: FSMContext):
     if not plan:
         await callback.answer("پلن یافت نشد!", show_alert=True)
         return
-    
+
+    await state.clear()
     await state.update_data(
         plan_id=plan_id,
         days=plan["days"],
@@ -104,6 +105,8 @@ async def select_plan(callback: CallbackQuery, state: FSMContext):
 @router.message(F.text == "🎨 پلن سفارشی")
 async def custom_plan_start(message: Message, state: FSMContext):
     """Start custom plan flow"""
+    # Clear any leftover plan_id from a previously selected ready-made plan
+    await state.clear()
     await state.set_state(CustomPlanStates.waiting_for_days)
     await message.answer(
         get_text("custom_plan_start"),
@@ -150,7 +153,7 @@ async def custom_plan_traffic(message: Message, state: FSMContext):
         days = data["days"]
         price = calculate_custom_price(days, traffic)
         
-        await state.update_data(traffic=traffic, price=price)
+        await state.update_data(traffic=traffic, price=price, plan_id=None)
         
         await message.answer(
             get_text("custom_plan_confirm", days=days, traffic=traffic, price=price),
@@ -183,6 +186,14 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext):
         return
     
     data = await state.get_data()
+
+    if not all(key in data for key in ("days", "traffic", "price")):
+        await callback.answer(
+            "اطلاعات سفارش ناقص است. لطفاً دوباره پلن را انتخاب کنید.",
+            show_alert=True,
+        )
+        await state.clear()
+        return
     
     try:
         async with AsyncSessionLocal() as session:
@@ -231,10 +242,15 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext):
         logger.info(f"Order {order.id} created by user {callback.from_user.id}")
     
     except Exception as e:
+        rate_limiter.reset_user(callback.from_user.id, "create_order")
         logger.error(f"Error creating order for user {callback.from_user.id}: {e}")
         await callback.message.edit_text(
-            "خطایی در ایجاد سفارش رخ داد. لطفاً دوباره تلاش کنید.",
-            reply_markup=user_main_menu(message.from_user.id)
+            "خطایی در ایجاد سفارش رخ داد. لطفاً دوباره تلاش کنید."
+        )
+        await callback.bot.send_message(
+            chat_id=callback.from_user.id,
+            text=get_text("start"),
+            reply_markup=user_main_menu(callback.from_user.id),
         )
         await state.clear()
         return
@@ -250,7 +266,7 @@ async def cancel_order(callback: CallbackQuery, state: FSMContext):
     await callback.bot.send_message(
         chat_id=callback.from_user.id,
         text=get_text("start"),
-        reply_markup=user_main_menu(message.from_user.id)
+        reply_markup=user_main_menu(callback.from_user.id)
     )
     await callback.answer()
 
@@ -263,6 +279,7 @@ async def receive_receipt(message: Message, state: FSMContext):
     
     if not order_id:
         await message.answer(get_text("error_general"))
+        await state.clear()
         return
     
     photo = message.photo[-1]
@@ -271,52 +288,80 @@ async def receive_receipt(message: Message, state: FSMContext):
         # Update order status
         result = await session.execute(select(Order).where(Order.id == order_id))
         order = result.scalar_one_or_none()
-        
-        if order:
-            order.status = "paid"
-            
-            # Create payment record
-            payment = Payment(
-                order_id=order_id,
-                user_id=message.from_user.id,
-                receipt_file_id=photo.file_id,
-                status="pending"
-            )
-            session.add(payment)
-            await session.commit()
-            await session.refresh(payment)
-            
-            # Notify user
+
+        if not order or order.user_id != message.from_user.id:
+            await message.answer(get_text("error_general"))
+            await state.clear()
+            return
+
+        if order.status not in ("pending", "paid"):
             await message.answer(
-                get_text("receipt_received"),
-                reply_markup=user_main_menu(message.from_user.id)
+                "این سفارش قابل ارسال رسید نیست.",
+                reply_markup=user_main_menu(message.from_user.id),
             )
-            
-            # Notify admins
-            from app.bot.keyboards.admin import payment_review_keyboard
-            
-            admin_text = get_text(
-                "admin_new_payment",
-                user_id=message.from_user.id,
-                username=message.from_user.username or "بدون نام کاربری",
-                order_id=order.id,
-                days=order.days,
-                traffic=order.traffic_gb,
-                price=order.price
-            )
-            
-            for admin_id in settings.ADMIN_IDS:
-                try:
-                    await message.bot.send_photo(
-                        chat_id=admin_id,
-                        photo=photo.file_id,
-                        caption=admin_text,
-                        reply_markup=payment_review_keyboard(payment.id)
-                    )
-                except Exception:
-                    pass
+            await state.clear()
+            return
+
+        order.status = "paid"
+        
+        # Create payment record
+        payment = Payment(
+            order_id=order_id,
+            user_id=message.from_user.id,
+            receipt_file_id=photo.file_id,
+            status="pending"
+        )
+        session.add(payment)
+        await session.commit()
+        await session.refresh(payment)
+        
+        # Notify user
+        await message.answer(
+            get_text("receipt_received"),
+            reply_markup=user_main_menu(message.from_user.id)
+        )
+        
+        # Notify admins
+        from app.bot.keyboards.admin import payment_review_keyboard
+        
+        admin_text = get_text(
+            "admin_new_payment",
+            user_id=message.from_user.id,
+            username=message.from_user.username or "بدون نام کاربری",
+            order_id=order.id,
+            days=order.days,
+            traffic=order.traffic_gb,
+            price=order.price
+        )
+        
+        for admin_id in settings.ADMIN_IDS:
+            try:
+                await message.bot.send_photo(
+                    chat_id=admin_id,
+                    photo=photo.file_id,
+                    caption=admin_text,
+                    reply_markup=payment_review_keyboard(payment.id)
+                )
+            except Exception:
+                pass
     
     await state.clear()
+
+
+_MENU_BUTTONS = {
+    "📦 خرید پلن",
+    "🎨 پلن سفارشی",
+    "📋 سفارش‌های من",
+    "💳 اکانت‌های من",
+    "⚙️ پنل ادمین",
+    "❌ لغو",
+}
+
+
+@router.message(PaymentStates.waiting_for_receipt, ~F.text.in_(_MENU_BUTTONS))
+async def receive_receipt_invalid(message: Message):
+    """Remind user to send a photo while waiting for receipt."""
+    await message.answer("لطفاً تصویر رسید پرداخت را ارسال کنید.")
 
 
 @router.message(F.text == "📋 سفارش‌های من")
@@ -386,11 +431,6 @@ async def my_accounts(message: Message):
             text = "💳 اکانت‌های شما:\n\n"
             
             for account in accounts:
-                order_result = await session.execute(
-                    select(Order).where(Order.id == account.order_id)
-                )
-                order = order_result.scalar_one_or_none()
-                
                 is_expired = account.expires_at < now
                 days_left = (account.expires_at - now).days if not is_expired else 0
                 
@@ -402,13 +442,14 @@ async def my_accounts(message: Message):
                     f"⏱ روزهای باقیمانده: {days_left} روز\n"
                     f"📅 تاریخ انقضا: {account.expires_at.strftime('%Y-%m-%d')}\n"
                     f"وضعیت: {status}\n"
-                    f"🔗 لینک اشتراک:\n`{account.subscription_path}`\n"
+                    f"🔗 لینک اشتراک:\n{account.subscription_path}\n"
                     f"{'─' * 30}\n\n"
                 )
             
             text += "برای تمدید اکانت با ادمین تماس بگیرید."
             
-            await message.answer(text, parse_mode="Markdown")
+            # No parse_mode: config URLs often contain characters that break Markdown
+            await message.answer(text)
             logger.info(f"User {message.from_user.id} viewed their accounts")
             
     except Exception as e:

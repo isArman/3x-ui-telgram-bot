@@ -1,21 +1,32 @@
- __pycache__/
- *.py[cod]
- *$py.class
- *.so
- .Python
- env/
- venv/
- ENV/
- .venv
- pip-log.txt
- pip-delete-this-directory.txt
- .pytest_cache/
- .coverage
- htmlcov/
- .git
- .gitignore
- .env
- data/
- *.md
- .vscode/
- .idea/
+# Byte-compiled
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtualenvs
+.Python
+env/
+venv/
+ENV/
+.venv/
+
+# Secrets & local data — never bake into the image
+.env
+.env.*
+!.env.example
+data/
+*.sqlite3
+*.db
+*.log
+
+# Dev / VCS clutter
+.git
+.gitignore
+.pytest_cache/
+.coverage
+htmlcov/
+.vscode/
+.idea/
+*.md
+tests/

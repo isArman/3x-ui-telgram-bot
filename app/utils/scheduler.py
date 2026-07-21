@@ -13,14 +13,16 @@ async def run_notification_scheduler(bot: Bot):
     
     while True:
         try:
-            # Check every 6 hours
-            await asyncio.sleep(6 * 60 * 60)
-            
             async with AsyncSessionLocal() as session:
                 notified = await check_expiring_accounts(session, bot)
                 if notified > 0:
                     logger.info(f"Notification check completed: {notified} notifications sent")
-                
+
+            # Check every 6 hours (after the first run on startup)
+            await asyncio.sleep(6 * 60 * 60)
+
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.error(f"Error in notification scheduler: {e}")
             # Wait 1 hour before retrying on error

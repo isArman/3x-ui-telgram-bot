@@ -1,0 +1,31 @@
+# Copy this file to plans.yaml and edit prices for your shop:
+#   cp app/config/plans.example.yaml app/config/plans.yaml
+#
+# price / per_day / per_gb are in your local currency (integer).
+
+plans:
+  - id: basic
+    name: "Basic"
+    days: 15
+    traffic: 10
+    price: 100000
+    description: "15 days — 10 GB"
+
+  - id: standard
+    name: "Standard"
+    days: 30
+    traffic: 15
+    price: 150000
+    description: "30 days — 15 GB"
+
+  - id: premium
+    name: "Premium"
+    days: 30
+    traffic: 30
+    price: 250000
+    description: "30 days — 30 GB"
+
+pricing:
+  # Used for custom plans: total = (days * per_day) + (gb * per_gb)
+  per_day: 4000
+  per_gb: 9000

@@ -26,6 +26,7 @@ async def assign_config(
         .where(PlanConfig.plan_id == plan_id, PlanConfig.is_assigned.is_(False))
         .order_by(PlanConfig.created_at.asc())
         .limit(1)
+        .with_for_update()
     )
     config = result.scalar_one_or_none()
     if not config:

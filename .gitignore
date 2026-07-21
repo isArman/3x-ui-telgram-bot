@@ -1,63 +1,77 @@
- # Byte-compiled / optimized / DLL files
- __pycache__/
- *.py[cod]
- *$py.class
- 
- # C extensions
- *.so
- 
- # Distribution / packaging
- .Python
- build/
- develop-eggs/
- dist/
- downloads/
- eggs/
- .eggs/
- lib/
- lib64/
- parts/
- sdist/
- var/
- wheels/
- *.egg-info/
- .installed.cfg
- *.egg
- 
- # Virtual environments
- venv/
- ENV/
- env/
- .venv
- 
- # IDE
- .vscode/
- .idea/
- *.swp
- *.swo
- *~
- 
-# Environment variables (never commit — use .env.example as template)
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Secrets & local config — never commit
 .env
-.env.local
-.env.*.local
- 
- # Database
- data/
- *.sqlite3
- *.db
- 
- # Logs
- *.log
+.env.*
+!.env.example
+*.pem
+*.key
+credentials*
+secrets*
+
+# Local plans/pricing (copy from plans.example.yaml)
+app/config/plans.yaml
+
+# Runtime data & database
+data/
+*.sqlite3
+*.db
+*.db-journal
+
+# Logs
+*.log
+logs/
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Test artifacts
+# Test / coverage artifacts
 .pytest_cache/
-htmlcov/
 .coverage
+htmlcov/
 *.cover
 .hypothesis/
-*.log
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# Docker
+*.tar

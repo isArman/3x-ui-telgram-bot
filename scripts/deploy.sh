@@ -6,6 +6,14 @@ cd "$(dirname "$0")/.."
 echo "==> Fixing .env formatting (strip leading spaces from keys)..."
 if [ -f .env ]; then
   sed -i 's/^[[:space:]]*//' .env
+else
+  echo "Missing .env — copy .env.example and fill in secrets first."
+  exit 1
+fi
+
+if [ ! -f app/config/plans.yaml ]; then
+  echo "==> Creating app/config/plans.yaml from example..."
+  cp app/config/plans.example.yaml app/config/plans.yaml
 fi
 
 echo "==> Pulling latest code..."
