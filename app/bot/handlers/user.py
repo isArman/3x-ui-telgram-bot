@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config.texts import get_text
 from app.config.settings import settings
 from app.config.plans_loader import PLANS, PRICING, get_plan
-from app.database.models import User, Order, Payment
+from app.database.models import User, Order, Payment, VPNAccount
 from app.database.session import AsyncSessionLocal
 from app.bot.constants import (
     BACK_BUTTON,
@@ -27,6 +27,9 @@ from app.bot.keyboards.user import (
     main_menu_keyboard,
     plans_keyboard,
     confirm_order_keyboard,
+    confirm_renew_keyboard,
+    accounts_list_keyboard,
+    renew_plans_keyboard,
     flow_nav_keyboard,
 )
 from app.services.users import get_or_create_user
@@ -483,7 +486,12 @@ async def receive_receipt(message: Message, state: FSMContext):
             order_id=order.id,
             days=order.days,
             traffic=order.traffic_gb,
-            price=order.price
+            price=order.price,
+            renewal_note=(
+                f"\n🔄 تمدید اکانت #{order.renew_vpn_account_id}"
+                if order.renew_vpn_account_id
+                else ""
+            ),
         )
         
         for admin_id in settings.ADMIN_IDS:
@@ -553,62 +561,233 @@ async def my_orders(message: Message, state: FSMContext):
         )
 
 
+async def send_accounts_list(event: Message | CallbackQuery) -> None:
+    from app.utils.logger import logger
+    from datetime import datetime
+
+    user_id = event.from_user.id
+    bot = event.bot
+    chat_id = event.chat.id if isinstance(event, Message) else event.message.chat.id
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(VPNAccount)
+            .where(VPNAccount.user_id == user_id)
+            .order_by(VPNAccount.created_at.desc())
+        )
+        accounts = result.scalars().all()
+
+        if not accounts:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=(
+                    "شما هنوز هیچ اکانتی ندارید.\n\n"
+                    "برای خرید اکانت جدید از منو 'خرید پلن' استفاده کنید."
+                ),
+                reply_markup=user_main_menu(user_id),
+            )
+            return
+
+        now = datetime.utcnow()
+        text = "💳 اکانت‌های شما:\n\n"
+
+        for account in accounts:
+            is_expired = account.expires_at < now
+            days_left = (account.expires_at - now).days if not is_expired else 0
+            status = "🟢 فعال" if not is_expired and account.is_active else "🔴 منقضی شده"
+
+            text += (
+                f"🆔 شماره سفارش: #{account.order_id}\n"
+                f"📊 حجم: {account.traffic_limit_gb} گیگابایت\n"
+                f"⏱ روزهای باقیمانده: {days_left} روز\n"
+                f"📅 تاریخ انقضا: {account.expires_at.strftime('%Y-%m-%d')}\n"
+                f"وضعیت: {status}\n"
+                f"🔗 لینک اشتراک:\n{account.subscription_path}\n"
+                f"{'─' * 30}\n\n"
+            )
+
+        text += "برای تمدید، دکمه «🔄 تمدید» زیر را بزنید."
+        await bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            reply_markup=accounts_list_keyboard(accounts),
+        )
+        logger.info("User %s viewed their accounts", user_id)
+
+
 @router.message(F.text == BTN_MY_ACCOUNTS)
 async def my_accounts(message: Message, state: FSMContext):
     """Show user's VPN accounts"""
     await state.clear()
-    from app.utils.logger import logger
-    from app.database.models import VPNAccount
-    from datetime import datetime
-    
     try:
-        async with AsyncSessionLocal() as session:
-            result = await session.execute(
-                select(VPNAccount)
-                .where(VPNAccount.user_id == message.from_user.id)
-                .order_by(VPNAccount.created_at.desc())
-            )
-            accounts = result.scalars().all()
-            
-            if not accounts:
-                await message.answer(
-                    "شما هنوز هیچ اکانتی ندارید.\n\n"
-                    "برای خرید اکانت جدید از منو 'خرید پلن' استفاده کنید.",
-                    reply_markup=user_main_menu(message.from_user.id)
-                )
-                return
-            
-            now = datetime.utcnow()
-            text = "💳 اکانت‌های شما:\n\n"
-            
-            for account in accounts:
-                is_expired = account.expires_at < now
-                days_left = (account.expires_at - now).days if not is_expired else 0
-                
-                status = "🟢 فعال" if not is_expired and account.is_active else "🔴 منقضی شده"
-                
-                text += (
-                    f"🆔 شماره سفارش: #{account.order_id}\n"
-                    f"📊 حجم: {account.traffic_limit_gb} گیگابایت\n"
-                    f"⏱ روزهای باقیمانده: {days_left} روز\n"
-                    f"📅 تاریخ انقضا: {account.expires_at.strftime('%Y-%m-%d')}\n"
-                    f"وضعیت: {status}\n"
-                    f"🔗 لینک اشتراک:\n{account.subscription_path}\n"
-                    f"{'─' * 30}\n\n"
-                )
-            
-            text += "برای تمدید اکانت با ادمین تماس بگیرید."
-            
-            # No parse_mode: config URLs often contain characters that break Markdown
-            await message.answer(
-                text,
-                reply_markup=user_main_menu(message.from_user.id),
-            )
-            logger.info(f"User {message.from_user.id} viewed their accounts")
-            
+        await send_accounts_list(message)
     except Exception as e:
-        logger.error(f"Error showing accounts for user {message.from_user.id}: {e}")
+        from app.utils.logger import logger
+        logger.error("Error showing accounts for user %s: %s", message.from_user.id, e)
         await message.answer(
             "خطایی رخ داد. لطفاً دوباره تلاش کنید.",
-            reply_markup=user_main_menu(message.from_user.id)
+            reply_markup=user_main_menu(message.from_user.id),
         )
+
+
+@router.callback_query(F.data == "back:accounts")
+async def back_to_accounts(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.delete()
+    try:
+        await send_accounts_list(callback)
+    except Exception:
+        await callback.bot.send_message(
+            chat_id=callback.from_user.id,
+            text=get_text("start"),
+            reply_markup=user_main_menu(callback.from_user.id),
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("renew_account:"))
+async def renew_account_start(callback: CallbackQuery, state: FSMContext):
+    vpn_account_id = int(callback.data.split(":")[1])
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(VPNAccount).where(
+                VPNAccount.id == vpn_account_id,
+                VPNAccount.user_id == callback.from_user.id,
+            )
+        )
+        account = result.scalar_one_or_none()
+
+    if not account:
+        await callback.answer("اکانت یافت نشد!", show_alert=True)
+        return
+
+    await state.clear()
+    await state.update_data(renew_vpn_account_id=vpn_account_id)
+    await callback.message.edit_text(
+        f"🔄 تمدید اکانت سفارش #{account.order_id}\n\n"
+        "یک پلن برای تمدید انتخاب کنید:",
+        reply_markup=renew_plans_keyboard(PLANS, vpn_account_id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("renew_plan:"))
+async def renew_select_plan(callback: CallbackQuery, state: FSMContext):
+    parts = callback.data.split(":")
+    vpn_account_id = int(parts[1])
+    plan_id = parts[2]
+    plan = get_plan(plan_id)
+
+    if not plan:
+        await callback.answer("پلن یافت نشد!", show_alert=True)
+        return
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(VPNAccount).where(
+                VPNAccount.id == vpn_account_id,
+                VPNAccount.user_id == callback.from_user.id,
+            )
+        )
+        account = result.scalar_one_or_none()
+
+    if not account:
+        await callback.answer("اکانت یافت نشد!", show_alert=True)
+        return
+
+    await state.update_data(
+        renew_vpn_account_id=vpn_account_id,
+        plan_id=plan_id,
+        days=plan["days"],
+        traffic=plan["traffic"],
+        price=plan["price"],
+    )
+
+    await callback.message.edit_text(
+        get_text(
+            "renewal_confirm",
+            order_id=account.order_id,
+            name=plan["name"],
+            days=plan["days"],
+            traffic=plan["traffic"],
+            price=plan["price"],
+        ),
+        reply_markup=confirm_renew_keyboard(vpn_account_id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "confirm_renew_order")
+async def confirm_renew_order(callback: CallbackQuery, state: FSMContext):
+    from app.utils.logger import logger
+    from app.utils.rate_limiter import rate_limiter
+
+    can_proceed, remaining = rate_limiter.check_limit(
+        callback.from_user.id, "create_order", seconds=60
+    )
+    if not can_proceed:
+        await callback.answer(
+            f"لطفاً {remaining} ثانیه صبر کنید قبل از سفارش جدید.",
+            show_alert=True,
+        )
+        return
+
+    data = await state.get_data()
+    renew_vpn_account_id = data.get("renew_vpn_account_id")
+    resolved = resolve_order_pricing(data)
+
+    if not renew_vpn_account_id or not resolved:
+        await callback.answer("اطلاعات تمدید نامعتبر است.", show_alert=True)
+        await state.clear()
+        return
+
+    plan_id, days, traffic_gb, price = resolved
+
+    async with AsyncSessionLocal() as session:
+        acc_result = await session.execute(
+            select(VPNAccount).where(
+                VPNAccount.id == renew_vpn_account_id,
+                VPNAccount.user_id == callback.from_user.id,
+            )
+        )
+        if not acc_result.scalar_one_or_none():
+            await callback.answer("اکانت یافت نشد!", show_alert=True)
+            await state.clear()
+            return
+
+        user = await get_or_create_user(session, callback.from_user)
+        order = Order(
+            user_id=callback.from_user.id,
+            days=days,
+            traffic_gb=traffic_gb,
+            price=price,
+            plan_id=plan_id,
+            renew_vpn_account_id=renew_vpn_account_id,
+            status="pending",
+        )
+        session.add(order)
+        await session.commit()
+        await session.refresh(order)
+
+    await callback.message.delete()
+    await callback.bot.send_message(
+        chat_id=callback.from_user.id,
+        text=get_text(
+            "order_created",
+            order_id=order.id,
+            price=order.price,
+            card_number=settings.CARD_NUMBER,
+            card_holder=settings.CARD_HOLDER,
+        ),
+        reply_markup=flow_nav_keyboard(),
+    )
+    await state.update_data(order_id=order.id)
+    await state.set_state(PaymentStates.waiting_for_receipt)
+    logger.info(
+        "Renewal order %s created for account %s by user %s",
+        order.id,
+        renew_vpn_account_id,
+        callback.from_user.id,
+    )
+    await callback.answer()

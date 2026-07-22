@@ -33,6 +33,10 @@ async def _migrate_sqlite_columns(conn):
     order_cols = {row[1] for row in result.fetchall()}
     if "plan_id" not in order_cols:
         await conn.execute(text("ALTER TABLE orders ADD COLUMN plan_id VARCHAR(50)"))
+    if "renew_vpn_account_id" not in order_cols:
+        await conn.execute(
+            text("ALTER TABLE orders ADD COLUMN renew_vpn_account_id INTEGER")
+        )
 
     result = await conn.execute(text("PRAGMA table_info(vpn_accounts)"))
     vpn_cols = {row[1] for row in result.fetchall()}

@@ -33,6 +33,7 @@ from app.services.panel_settings import (
     get_panel_settings,
     is_auto_provisioning_ready,
 )
+from app.services.renewal import extend_vpn_account
 from app.services.xui_provisioning import provision_subscription_for_order
 from app.utils.logger import logger
 from app.utils.validation import is_valid_config_text
@@ -75,6 +76,37 @@ async def complete_payment_approval(
     await session.commit()
 
 
+async def complete_renewal_approval(
+    session,
+    payment: Payment,
+    order: Order,
+    admin_id: int,
+    vpn_account: VPNAccount,
+    subscription_url: str | None = None,
+) -> VPNAccount:
+    payment.status = "approved"
+    payment.reviewed_at = datetime.utcnow()
+    payment.reviewed_by = admin_id
+    order.status = "completed"
+    await extend_vpn_account(session, vpn_account, order, subscription_url)
+    await session.commit()
+    await session.refresh(vpn_account)
+    return vpn_account
+
+
+async def send_renewal_to_user(bot, user_id: int, vpn_account: VPNAccount, order: Order) -> None:
+    await bot.send_message(
+        chat_id=user_id,
+        text=get_text(
+            "renewal_approved",
+            days=order.days,
+            traffic=order.traffic_gb,
+            expires_at=vpn_account.expires_at.strftime("%Y-%m-%d"),
+            subscription_url=vpn_account.subscription_path,
+        ),
+    )
+
+
 async def send_config_to_user(bot, user_id: int, config_text: str) -> None:
     await bot.send_message(
         chat_id=user_id,
@@ -112,16 +144,49 @@ async def _finalize_config_delivery(
     await callback.answer("کانفیگ ارسال شد!")
 
 
+async def _finalize_renewal_delivery(
+    callback: CallbackQuery,
+    order: Order,
+    payment: Payment,
+    vpn_account: VPNAccount,
+    source_label: str,
+    plan_name: str | None = None,
+) -> None:
+    try:
+        await send_renewal_to_user(callback.bot, order.user_id, vpn_account, order)
+    except Exception as exc:
+        logger.error("Failed to notify user %s about renewal: %s", order.user_id, exc)
+
+    label = plan_name or order.plan_id or "سفارشی"
+    await callback.message.answer(
+        f"✅ تمدید تایید شد ({source_label})!\n\n"
+        f"👤 کاربر: {order.user_id}\n"
+        f"📦 پلن: {label}\n"
+        f"🆔 اکانت سفارش #{vpn_account.order_id}\n"
+        f"📅 انقضای جدید: {vpn_account.expires_at:%Y-%m-%d}"
+    )
+    try:
+        await callback.message.edit_caption(
+            caption=(callback.message.caption or "") + f"\n\n✅ تمدید ({source_label})"
+        )
+    except Exception:
+        pass
+    await callback.answer("تمدید انجام شد!")
+
+
 async def _try_auto_provision(
     session,
     order: Order,
     user: User,
+    vpn_account: VPNAccount | None = None,
 ) -> str | None:
     panel = await get_panel_settings(session)
     if not is_auto_provisioning_ready(panel):
         return None
 
-    return await provision_subscription_for_order(session, panel, user, order)
+    return await provision_subscription_for_order(
+        session, panel, user, order, existing_account=vpn_account
+    )
 
 
 async def _try_inventory_fallback(
@@ -340,6 +405,48 @@ async def approve_payment(callback: CallbackQuery, state: FSMContext):
         user = user_result.scalar_one_or_none()
         if not user:
             await callback.answer("کاربر یافت نشد!", show_alert=True)
+            return
+
+        # --- Renewal order ---
+        if order.renew_vpn_account_id:
+            acc_result = await session.execute(
+                select(VPNAccount).where(VPNAccount.id == order.renew_vpn_account_id)
+            )
+            vpn_account = acc_result.scalar_one_or_none()
+            if not vpn_account or vpn_account.user_id != order.user_id:
+                await callback.answer("اکانت تمدید یافت نشد!", show_alert=True)
+                return
+
+            sub_url = await _try_auto_provision(session, order, user, vpn_account)
+            if sub_url:
+                vpn_account = await complete_renewal_approval(
+                    session,
+                    payment,
+                    order,
+                    callback.from_user.id,
+                    vpn_account,
+                    sub_url,
+                )
+                logger.info(
+                    "Auto-renewed account %s for order %s", vpn_account.id, order.id
+                )
+                await _finalize_renewal_delivery(
+                    callback, order, payment, vpn_account, "خودکار 3x-ui", plan_name
+                )
+                return
+
+            await complete_renewal_approval(
+                session,
+                payment,
+                order,
+                callback.from_user.id,
+                vpn_account,
+                None,
+            )
+            logger.info("Renewed account %s (DB only) for order %s", vpn_account.id, order.id)
+            await _finalize_renewal_delivery(
+                callback, order, payment, vpn_account, "تمدید دستی", plan_name
+            )
             return
 
         # 1) Auto provisioning via 3x-ui (if enabled)

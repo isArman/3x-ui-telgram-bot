@@ -5,11 +5,15 @@ from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database.models import Order, PanelSettings, User
+from app.database.models import Order, PanelSettings, User, VPNAccount
 from app.services.panel_settings import get_selected_inbound_ids, xui_client_for_panel
 from app.utils.client_identity import build_client_comment, panel_client_email
 from app.utils.logger import logger
 from app.xui.client import XUIError, build_subscription_url
+
+
+def _gb_to_bytes(gb: int) -> int:
+    return gb * 1024 * 1024 * 1024
 
 
 async def provision_subscription_for_order(
@@ -17,10 +21,11 @@ async def provision_subscription_for_order(
     settings: PanelSettings,
     user: User,
     order: Order,
+    existing_account: VPNAccount | None = None,
 ) -> Optional[str]:
     """
     Create or update a 3x-ui client and return the subscription URL.
-    Returns None on failure (caller should fall back to manual inventory).
+    For renewals, extends expiry and traffic from current panel/DB values.
     """
     inbound_ids = get_selected_inbound_ids(settings)
     if not inbound_ids:
@@ -29,11 +34,23 @@ async def provision_subscription_for_order(
 
     email = panel_client_email(user)
     comment = build_client_comment(user)
-    total_bytes = order.traffic_gb * 1024 * 1024 * 1024
-    expiry_ms = int(time.time() * 1000) + order.days * 24 * 60 * 60 * 1000
+    now_ms = int(time.time() * 1000)
+    add_bytes = _gb_to_bytes(order.traffic_gb)
+    add_ms = order.days * 24 * 60 * 60 * 1000
 
     try:
         async with xui_client_for_panel(settings) as client:
+            existing_client = await client.get_client(email)
+            client_data = (existing_client or {}).get("client") or {}
+
+            if existing_account and client_data:
+                current_expiry = int(client_data.get("expiryTime") or 0)
+                expiry_ms = max(now_ms, current_expiry) + add_ms
+                total_bytes = int(client_data.get("totalGB") or 0) + add_bytes
+            else:
+                expiry_ms = now_ms + add_ms
+                total_bytes = add_bytes
+
             detail = await client.upsert_client(
                 email=email,
                 inbound_ids=inbound_ids,

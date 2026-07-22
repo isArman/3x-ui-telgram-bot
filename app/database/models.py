@@ -29,6 +29,9 @@ class Order(Base):
     traffic_gb: Mapped[int] = mapped_column(Integer, nullable=False)
     price: Mapped[int] = mapped_column(Integer, nullable=False)
     plan_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    renew_vpn_account_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("vpn_accounts.id"), nullable=True
+    )
     status: Mapped[str] = mapped_column(String(50), default="pending")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
