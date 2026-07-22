@@ -29,6 +29,7 @@ async def extend_vpn_account(
         vpn_account.subscription_path = subscription_url
     vpn_account.is_active = True
     vpn_account.expiry_notified = False
+    vpn_account.traffic_low_notified = False
     vpn_account.last_renewed_at = datetime.utcnow()
     await session.flush()
     return vpn_account

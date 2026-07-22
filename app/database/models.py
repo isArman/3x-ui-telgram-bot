@@ -71,6 +71,7 @@ class VPNAccount(Base):
     traffic_limit_gb: Mapped[int] = mapped_column(Integer, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     expiry_notified: Mapped[bool] = mapped_column(Boolean, default=False)
+    traffic_low_notified: Mapped[bool] = mapped_column(Boolean, default=False)
     last_renewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(

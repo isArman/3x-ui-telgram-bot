@@ -51,6 +51,13 @@ async def _migrate_sqlite_columns(conn):
                 "ADD COLUMN config_ref VARCHAR(255) DEFAULT 'manual'"
             )
         )
+    if "traffic_low_notified" not in vpn_cols:
+        await conn.execute(
+            text(
+                "ALTER TABLE vpn_accounts "
+                "ADD COLUMN traffic_low_notified BOOLEAN DEFAULT 0"
+            )
+        )
 
 
 async def _migrate_sqlite_indexes(conn):
