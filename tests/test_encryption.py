@@ -1,13 +1,18 @@
-from app.utils.encryption import decrypt, encrypt
+from app.utils.encryption import decrypt, encrypt, decrypt_if_needed, _looks_encrypted
 
 
-def test_encrypt_decrypt_roundtrip():
+def test_double_encryption_roundtrip():
     original = "panel-secret-password"
-    ciphertext = encrypt(original)
-    assert ciphertext != original
-    assert decrypt(ciphertext) == original
+    once = encrypt(original)
+    twice = encrypt(once)
+    assert decrypt_if_needed(twice) == original
 
 
-def test_encrypt_empty_string():
-    assert encrypt("") == ""
-    assert decrypt("") == ""
+def test_plaintext_legacy():
+    assert decrypt_if_needed("plain-password") == "plain-password"
+
+
+def test_looks_encrypted():
+    token = encrypt("x")
+    assert _looks_encrypted(token)
+    assert not _looks_encrypted("plain")

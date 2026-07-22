@@ -301,8 +301,15 @@ async def panel_test_connection(callback: CallbackQuery):
             await callback.answer(f"خطا: {exc}", show_alert=True)
             return
         except Exception as exc:
-            logger.error("Panel test failed: %s", exc)
-            await callback.answer("خطای اتصال", show_alert=True)
+            logger.error("Panel test failed: %s", exc, exc_info=True)
+            err = str(exc).lower()
+            if "certificate" in err or "ssl" in err:
+                await callback.answer(
+                    "خطای SSL — در .env مقدار XUI_VERIFY_SSL=false بگذارید (فقط dev).",
+                    show_alert=True,
+                )
+            else:
+                await callback.answer(f"خطای اتصال: {exc}", show_alert=True)
             return
 
     await callback.message.answer(

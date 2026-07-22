@@ -42,11 +42,20 @@ def decrypt(ciphertext: str) -> str:
     return _get_fernet().decrypt(ciphertext.encode()).decode()
 
 
+def _looks_encrypted(value: str) -> bool:
+    return bool(value) and value.startswith("gAAAA")
+
+
 def decrypt_if_needed(value: str) -> str:
-    """Return plaintext; supports legacy unencrypted values in the database."""
+    """Return plaintext; unwrap legacy plaintext and over-encrypted Fernet blobs."""
     if not value:
         return ""
-    try:
-        return decrypt(value)
-    except (InvalidToken, ValueError, TypeError):
-        return value
+    current = value
+    for _ in range(10):
+        if not _looks_encrypted(current):
+            return current
+        try:
+            current = decrypt(current)
+        except (InvalidToken, ValueError, TypeError):
+            return current
+    return current

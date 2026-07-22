@@ -1,4 +1,5 @@
 import json
+import logging
 from contextlib import asynccontextmanager
 from typing import AsyncIterator, List
 
@@ -6,23 +7,21 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import PanelSettings
-from app.utils.encryption import decrypt_if_needed, encrypt
+from app.utils.encryption import decrypt_if_needed, encrypt, _looks_encrypted
 
 PROVISIONING_MANUAL = "manual"
 PROVISIONING_AUTO = "auto"
 
+logger = logging.getLogger(__name__)
+
 
 def migrate_plaintext_password(settings: PanelSettings) -> bool:
-    """Re-encrypt legacy plaintext panel passwords. Returns True if migrated."""
+    """Encrypt legacy plaintext panel passwords. Never re-encrypt Fernet blobs."""
     raw = settings.panel_password or ""
-    if not raw:
+    if not raw or _looks_encrypted(raw):
         return False
-    try:
-        decrypt(raw)
-        return False
-    except Exception:
-        set_panel_password(settings, raw)
-        return True
+    set_panel_password(settings, raw)
+    return True
 
 
 async def get_panel_settings(session: AsyncSession) -> PanelSettings:
@@ -35,11 +34,31 @@ async def get_panel_settings(session: AsyncSession) -> PanelSettings:
         await session.refresh(row)
     elif migrate_plaintext_password(row):
         await session.commit()
+    elif repair_panel_password(row):
+        await session.commit()
     return row
 
 
 def get_panel_password(settings: PanelSettings) -> str:
-    return decrypt_if_needed(settings.panel_password or "")
+    pwd = decrypt_if_needed(settings.panel_password or "")
+    if _looks_encrypted(pwd):
+        logger.warning(
+            "Panel password could not be decrypted — re-run panel setup in the bot."
+        )
+        return ""
+    return pwd
+
+
+def repair_panel_password(settings: PanelSettings) -> bool:
+    """Re-encrypt password once if DB has nested encryption. Returns True if repaired."""
+    pwd = decrypt_if_needed(settings.panel_password or "")
+    if not pwd or _looks_encrypted(pwd):
+        return False
+    clean = encrypt(pwd)
+    if settings.panel_password == clean:
+        return False
+    settings.panel_password = clean
+    return True
 
 
 def set_panel_password(settings: PanelSettings, password: str) -> None:
