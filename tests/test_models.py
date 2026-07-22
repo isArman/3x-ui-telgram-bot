@@ -36,6 +36,9 @@ async def test_create_order():
     await init_db()
     
     async with AsyncSessionLocal() as session:
+        session.add(User(id=123456, username="testuser"))
+        await session.flush()
+
         order = Order(
             user_id=123456,
             days=30,
@@ -59,6 +62,9 @@ async def test_create_payment():
     await init_db()
     
     async with AsyncSessionLocal() as session:
+        session.add(User(id=123456, username="testuser"))
+        await session.flush()
+
         order = Order(
             user_id=123456,
             days=30,
@@ -89,6 +95,9 @@ async def test_create_vpn_account():
     await init_db()
     
     async with AsyncSessionLocal() as session:
+        session.add(User(id=123456, username="testuser"))
+        await session.flush()
+
         order = Order(
             user_id=123456,
             days=30,
@@ -123,6 +132,10 @@ async def test_vpn_account_notification_fields():
     await init_db()
     
     async with AsyncSessionLocal() as session:
+        user = User(id=123, username="notify_user")
+        session.add(user)
+        await session.flush()
+
         order = Order(user_id=123, days=30, traffic_gb=40, price=100000)
         session.add(order)
         await session.flush()

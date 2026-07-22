@@ -1,84 +1,64 @@
 # ربات فروش VPN در تلگرام
 
-با این پروژه می‌توانید روی تلگرام اشتراک VPN بفروشید: کاربر پلن می‌خرد، به کارت شما واریز می‌کند، رسید می‌فرستد؛ شما تأیید می‌کنید و ربات یک کانفیگ از موجودی همان پلن برایش می‌فرستد.
+[![Tests](https://github.com/isArman/3x-ui-telgram-bot/actions/workflows/test.yml/badge.svg)](https://github.com/isArman/3x-ui-telgram-bot/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-نیازی به اتصال خودکار به پنل 3x-ui نیست — کانفیگ‌ها را خودتان می‌سازید و در ربات انبار می‌کنید.
+> **English:** Telegram bot to sell VPN subscriptions. Supports manual config inventory **or** automatic provisioning via [3x-ui](https://github.com/MHSanaei/3x-ui) panel. Users pay by bank transfer, upload receipt; admin approves; bot delivers subscription link.
+
+---
+
+## قابلیت‌ها
+
+- فروش پلن‌های آماده و پلن سفارشی (روز + حجم)
+- پرداخت کارت‌به‌کارت + آپلود رسید
+- تأیید/رد پرداخت توسط ادمین
+- **دو حالت ارسال کانفیگ:**
+  1. **خودکار (3x-ui)** — ساخت/آپدیت کلاینت در پنل + ارسال لینک subscription
+  2. **انبار دستی** — کانفیگ‌های از پیش ذخیره‌شده per-plan
+- fallback: اگر auto یا انبار ناموفق بود → ادمین لینک را دستی می‌فرستد
+- نوتیفیکیشن انقضای اکانت (هر ۶ ساعت)
+- داشبورد ادمین + موجودی کانفیگ
+- دکمه بازگشت در تمام مراحل خرید
 
 ---
 
 ## پیش‌نیازها
 
-روی سیستم یا سرور باید این‌ها را داشته باشید:
-
-1. **Docker** و **Docker Compose** (روش پیشنهادی)  
-   یا به‌جای آن Python 3.11+
-2. یک اکانت تلگرام
-3. شماره کارت بانکی برای دریافت وجه (برای نمایش به مشتری)
-
-بررسی نصب Docker:
-
-```bash
-docker --version
-docker compose version
-```
-
-اگر نبود، از مستندات رسمی Docker نصب کنید: https://docs.docker.com/get-docker/
+| مورد | الزامی |
+|------|--------|
+| Docker + Docker Compose | پیشنهادی |
+| Python 3.11+ | بدون Docker |
+| اکانت تلگرام + BotFather token | بله |
+| پنل 3x-ui | فقط برای حالت خودکار |
+| شماره کارت بانکی | بله |
 
 ---
 
-## مرحله ۱ — ساخت ربات در تلگرام
-
-1. در تلگرام به [@BotFather](https://t.me/BotFather) بروید.
-2. دستور `/newbot` را بزنید و نام و یوزرنیم ربات را انتخاب کنید.
-3. توکنی شبیه این می‌گیرید — نگه دارید:
-
-```text
-7123456789:AAHxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-```
-
-4. (اختیاری) با `/setuserpic` و `/setdescription` ظاهر ربات را تنظیم کنید.
-
----
-
-## مرحله ۲ — پیدا کردن آیدی عددی ادمین
-
-آیدی عددی تلگرام خودتان را لازم دارید (نه یوزرنیم).
-
-1. به [@userinfobot](https://t.me/userinfobot) یا [@getidsbot](https://t.me/getidsbot) پیام دهید.
-2. عدد `Id` را کپی کنید (مثلاً `123456789`).
-
-اگر چند ادمین دارید، همه آیدی‌ها را با ویرگول جدا کنید.
-
----
-
-## مرحله ۳ — دانلود پروژه
+## نصب سریع (Docker)
 
 ```bash
 git clone https://github.com/isArman/3x-ui-telgram-bot.git
 cd 3x-ui-telgram-bot
-```
 
-فایل‌های تنظیمات را از روی نمونه بسازید:
-
-```bash
 cp .env.example .env
 cp app/config/plans.example.yaml app/config/plans.yaml
 mkdir -p data
+
+# ویرایش .env — حداقل BOT_TOKEN, ADMIN_IDS, CARD_NUMBER, CARD_HOLDER
+nano .env
+
+# تولید SECRET_KEY (برای رمزنگاری پسورد پنل در دیتابیس)
+python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+
+docker compose up -d --build
+docker compose logs -f bot
 ```
 
-> بدون `plans.yaml` و `.env` ربات درست بالا نمی‌آید. هر دو فایل را باید خودتان از روی نمونه بسازید.
+در لاگ باید ببینید: `Bot started with N admin(s) configured`
 
 ---
 
-## مرحله ۴ — تنظیم `.env`
-
-فایل `.env` را با یک ادیتور باز کنید:
-
-```bash
-nano .env
-```
-
-مقادیر را این‌طور پر کنید:
+## تنظیم `.env`
 
 ```env
 BOT_TOKEN=7123456789:AAHxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
@@ -86,35 +66,30 @@ ADMIN_IDS=123456789
 CARD_NUMBER=6037-1234-5678-9012
 CARD_HOLDER=نام صاحب کارت
 DATABASE_URL=sqlite+aiosqlite:///data/db.sqlite3
+SECRET_KEY=your-fernet-key-here
+XUI_VERIFY_SSL=true
+LOG_LEVEL=INFO
 ```
 
 | متغیر | توضیح |
 |--------|--------|
 | `BOT_TOKEN` | توکن BotFather |
-| `ADMIN_IDS` | آیدی عددی ادمین(ها). چندتایی: `111,222,333` |
-| `CARD_NUMBER` | شماره کارتی که به مشتری نشان داده می‌شود |
-| `CARD_HOLDER` | نام صاحب کارت |
-| `DATABASE_URL` | معمولاً همین مقدار پیش‌فرض کافی است |
+| `ADMIN_IDS` | آیدی عددی ادمین(ها)، با ویرگول |
+| `CARD_NUMBER` / `CARD_HOLDER` | اطلاعات پرداخت |
+| `SECRET_KEY` | رمزنگاری پسورد پنل در SQLite — **در production الزامی** |
+| `XUI_VERIFY_SSL` | `false` فقط برای پنل با گواهی self-signed در dev |
+| `LOG_LEVEL` | سطح لاگ |
 
-### نکات مهم `.env`
-
-- **قبل از نام متغیر فاصله نگذارید.**  
-  درست: `ADMIN_IDS=123`  
-  غلط: ` ADMIN_IDS=123` (Docker این خط را نادیده می‌گیرد)
-- فایل `.env` را commit / در گیت‌هاب آپلود نکنید.
-- بعد از عوض کردن `.env` باید کانتینر را دوباره بسازید یا حداقل recreate کنید.
+> **نکته:** قبل از نام متغیر فاصله نگذارید. ` ADMIN_IDS=123` توسط Docker نادیده گرفته می‌شود.
 
 ---
 
-## مرحله ۵ — تنظیم پلن‌ها و قیمت‌ها
-
-فایل پلن‌ها:
+## تنظیم پلن‌ها (`plans.yaml`)
 
 ```bash
+cp app/config/plans.example.yaml app/config/plans.yaml
 nano app/config/plans.yaml
 ```
-
-نمونه ساختار:
 
 ```yaml
 plans:
@@ -125,193 +100,178 @@ plans:
     price: 100000
     description: "15 روزه — 10 گیگابایت"
 
-  - id: standard
-    name: "پلن استاندارد"
-    days: 30
-    traffic: 15
-    price: 150000
-    description: "یک ماهه — 15 گیگابایت"
-
 pricing:
   per_day: 4000
   per_gb: 9000
 ```
 
-| فیلد | معنی |
-|------|------|
-| `id` | شناسه یکتا (انگلیسی، بدون فاصله) — برای انبار کانفیگ مهم است |
-| `name` | نام نمایشی در ربات |
-| `days` | مدت اشتراک (روز) |
-| `traffic` | حجم به گیگابایت |
-| `price` | قیمت پلن آماده (عدد صحیح، مثلاً تومان) |
-| `description` | توضیح کوتاه |
-| `per_day` / `per_gb` | فرمول پلن سفارشی: `(روز × per_day) + (گیگ × per_gb)` |
+فرمول پلن سفارشی: `(روز × per_day) + (گیگ × per_gb)`
 
-می‌توانید پلن اضافه/حذف کنید؛ فقط `id`ها یکتا باشند.
+بعد از تغییر قیمت: `docker compose restart`
 
 ---
 
-## مرحله ۶ — روشن کردن ربات (Docker — پیشنهادی)
+## راه‌اندازی پنل 3x-ui (حالت خودکار)
 
-از ریشه پروژه:
+1. در ربات: **⚙️ پنل ادمین** → **🔗 پنل 3x-ui**
+2. **⚙️ تنظیم اتصال پنل** — URL، username، password
+3. ربات اتصال را تست می‌کند و آدرس subscription را از تنظیمات پنل می‌خواند
+4. **📡 بروزرسانی Inboundها** — inboundهای مورد نظر را انتخاب کنید
+5. **حالت ارسال** را روی **🤖 خودکار** بگذارید
 
-```bash
-docker compose up -d --build
+### رفتار auto-provision
+
+- Email کلاینت = Telegram user ID
+- Comment = فقط اطلاعات پروفایل تلگرام (id, username, name)
+- خرید مجدد = **آپدیت** همان کلاینت (نه ساخت جدید)
+- خطا → fallback به انبار دستی → fallback به ارسال دستی
+
+---
+
+## انبار دستی (حالت manual)
+
+1. کانفیگ‌ها را در پنل VPN بسازید
+2. **⚙️ پنل ادمین** → **🗂 مدیریت کانفیگ‌ها** → **➕ افزودن**
+3. پلن را انتخاب کنید و لینک `vless://` یا subscription بفرستید
+4. هنگام تأیید پرداخت، یک کانفیگ آزاد assign می‌شود
+
+---
+
+## فلوی خرید کاربر
+
+```
+/start → خرید پلن → انتخاب → تایید → واریز → ارسال رسید
+                                              ↓
+                                    ادمین تأیید/رد
+                                              ↓
+                              auto 3x-ui / انبار / دستی
+                                              ↓
+                                   لینک subscription
 ```
 
-وضعیت:
+---
 
-```bash
-docker compose ps
-docker compose logs -f bot
+## دستورات ادمین
+
+| دستور / منو | کار |
+|-------------|-----|
+| `/admin` | پنل ادمین |
+| `/configs` | مدیریت انبار کانفیگ |
+| `/dashboard` | آمار |
+| `/pending` | پرداخت‌های در انتظار |
+| `/payments` | تاریخچه |
+| **🔗 پنل 3x-ui** | اتصال پنل، inbound، auto/manual |
+
+---
+
+## امنیت و حریم خصوصی
+
+### فایل‌های حساس — هرگز commit نکنید
+
+| فایل / پوشه | محتوا |
+|-------------|--------|
+| `.env` | توکن ربات، SECRET_KEY، ADMIN_IDS |
+| `data/` | دیتابیس SQLite، لاگ‌ها |
+| `app/config/plans.yaml` | قیمت‌ها و پلن‌های شما |
+
+همه در `.gitignore` هستند. قبل از public کردن repo، تاریخچه git را برای leak بررسی کنید.
+
+### متغیرهای امنیتی
+
+```env
+SECRET_KEY=...          # رمزنگاری پسورد پنل 3x-ui در دیتابیس (الزامی در production)
+XUI_VERIFY_SSL=true     # false فقط برای پنل self-signed در محیط dev
 ```
 
-در لاگ باید چیزی شبیه این ببینید:
+تولید `SECRET_KEY`:
+
+```bash
+python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+### داده‌های ذخیره‌شده
+
+| داده | محل | توضیح |
+|------|-----|--------|
+| توکن ربات | `.env` | با `/revoke` در BotFather قابل rotate |
+| پسورد پنل 3x-ui | SQLite | رمزنگاری‌شده با Fernet |
+| رسید پرداخت | Telegram + DB | `receipt_file_id` — مرجع فایل تلگرام |
+| لینک subscription | SQLite | برای تحویل سرویس به کاربر |
+| پروفایل تلگرام | SQLite | id، username، نام |
+
+### حریم خصوصی کاربران
+
+- فیلد **comment** در پنل 3x-ui فقط شامل id، username و نام تلگرام است (بدون جزئیات سفارش)
+- لاگ‌ها توکن و پسورد را ذخیره نمی‌کنند
+- پیام پسورد پنل بعد از setup از چت admin حذف می‌شود
+
+### توصیه‌های عملیاتی
+
+1. فقط آیدی‌های مورد اعتماد در `ADMIN_IDS`
+2. توکن لو رفته → فوراً `/revoke` در BotFather
+3. پسورد پنل لو رفته → در 3x-ui عوض کنید و اتصال را دوباره setup کنید
+4. از HTTPS برای پنل 3x-ui استفاده کنید (`XUI_VERIFY_SSL=true`)
+5. پوشه `data/` را backup بگیرید — ولی backup را public نکنید
+
+### گزارش آسیب‌پذیری
+
+لطفاً issue عمومی باز نکنید. جزئیات را به maintainer به‌صورت خصوصی بفرستید.
+
+→ راهنمای کامل: [SECURITY.md](SECURITY.md)
+
+---
+
+## تست
+
+```bash
+docker run --rm \
+  -e BOT_TOKEN=test:123 -e ADMIN_IDS=1 \
+  -e CARD_NUMBER=1234 -e CARD_HOLDER=Test \
+  -e SECRET_KEY=test-key \
+  -v "$(pwd):/app" \
+  3x-ui-telgram-bot-bot \
+  sh -c "pip install -q pytest pytest-asyncio && python -m pytest tests/ -v"
+```
+
+---
+
+## ساختار پروژه
 
 ```text
-Admin IDs loaded: [123456789]
-Starting bot polling...
+app/
+  bot/handlers/     # user, admin, panel_admin
+  bot/keyboards/    # Reply & inline keyboards
+  bot/auth.py       # Admin authorization
+  config/           # settings, plans, texts
+  database/         # SQLAlchemy models
+  services/         # provisioning, inventory, users
+  xui/              # 3x-ui API client
+  utils/            # encryption, validation, scheduler
+data/               # SQLite + logs (gitignored)
+tests/
 ```
-
-اگر این خطوط آمد، ربات آنلاین است. با `Ctrl+C` از دنبال‌کردن لاگ خارج شوید (ربات خاموش نمی‌شود).
-
-### دستورات روزمره
-
-| کار | دستور |
-|-----|--------|
-| مشاهده لاگ | `docker compose logs -f bot` |
-| خاموش کردن | `docker compose down` |
-| روشن مجدد | `docker compose up -d` |
-| بعد از تغییر قیمت (`plans.yaml`) | `docker compose restart` |
-| بعد از تغییر کد یا `.env` | `docker compose up -d --build` |
-
-> `plans.yaml` به کانتینر mount شده؛ برای تغییر قیمت معمولاً فقط `restart` کافی است و نیازی به rebuild نیست.
-
-روی سرور می‌توانید از اسکریپت هم استفاده کنید (`.env` و `plans.yaml` از قبل باید آماده باشند):
-
-```bash
-chmod +x scripts/deploy.sh
-./scripts/deploy.sh
-```
-
----
-
-## مرحله ۷ — اولین ورود به ربات به‌عنوان ادمین
-
-1. در تلگرام ربات خودتان را باز کنید و `/start` بزنید.
-2. اگر آیدی‌تان در `ADMIN_IDS` باشد، در منو دکمه **⚙️ پنل ادمین** را می‌بینید.
-3. اگر ندیدید:
-   - آیدی را دوباره چک کنید
-   - فاصله اضافه در `.env` نباشد
-   - با `docker compose up -d --build` دوباره بالا بیاورید
-   - لاگ را برای `Admin IDs loaded` ببینید
-
----
-
-## مرحله ۸ — پر کردن انبار کانفیگ (الزامی قبل از فروش)
-
-ربات خودش روی سرور VPN کانفیگ نمی‌سازد. باید لینک‌ها را دستی بسازید و در انبار بگذارید.
-
-1. روی سرور/پنل VPN خودتان به تعداد لازم کانفیگ یا لینک سابسکریپشن بسازید  
-   (مثلاً `vless://...` یا لینک `https://.../sub/...`).
-2. در ربات: **⚙️ پنل ادمین** → مدیریت کانفیگ‌ها → افزودن.
-3. پلن مورد نظر را انتخاب کنید و لینک را بفرستید.
-4. برای هر فروش موفق، یک کانفیگ آزاد لازم است — موجودی را از قبل پر نگه دارید.
-
-دستورهای ادمین:
-
-| دستور | کار |
-|--------|-----|
-| `/admin` | پنل ادمین |
-| `/configs` | مدیریت موجودی کانفیگ |
-| `/dashboard` | آمار و موجودی |
-| `/pending` | پرداخت‌های در انتظار |
-| `/payments` | تاریخچه پرداخت‌ها |
-
----
-
-## مرحله ۹ — تست یک خرید کامل
-
-با یک اکانت تلگرام دیگر (غیر ادمین بهتر است):
-
-1. `/start` → **📦 خرید پلن** → یک پلن را انتخاب و تأیید کنید.
-2. شماره کارت و مبلغ را ببینید؛ یک عکس رسید (حتی تستی) بفرستید.
-3. با اکانت ادمین، رسید را تأیید (`approve`) کنید.
-4. باید کانفیگ برای کاربر ارسال شود.
-
-اگر موجودی آن پلن خالی باشد، ربات از ادمین می‌خواهد لینک/کانفیگ را همان لحظه دستی بفرستد. برای پلن‌های سفارشی هم معمولاً لینک را دستی وارد می‌کنید.
-
----
-
-## اجرای بدون Docker (اختیاری)
-
-```bash
-cd 3x-ui-telgram-bot
-python3 -m venv .venv
-source .venv/bin/activate          # ویندوز: .venv\Scripts\activate
-pip install -r requirements.txt
-
-cp .env.example .env
-cp app/config/plans.example.yaml app/config/plans.yaml
-mkdir -p data
-
-# .env و plans.yaml را مثل مراحل ۴ و ۵ ویرایش کنید
-
-python -m app.main
-```
-
-برای توقف: `Ctrl+C`.
 
 ---
 
 ## عیب‌یابی
 
-| مشکل | کارهایی که چک کنید |
-|------|---------------------|
-| ربات به پیام جواب نمی‌دهد | `docker compose logs -f bot` — خطا یا قطع شدن polling |
-| دکمه پنل ادمین نیست | `ADMIN_IDS`، نبودن فاصله اول خط، rebuild بعد از تغییر `.env` |
-| قیمت‌های قدیمی نشان می‌دهد | فایل `app/config/plans.yaml` روی هاست را چک کنید، بعد `docker compose restart` |
-| بعد از recreate هنوز کد/قیمت قدیم است | حتماً `--build` بزنید: `docker compose up -d --build` |
-| خطای Missing required settings | یکی از `BOT_TOKEN` / `ADMIN_IDS` / `CARD_NUMBER` / `CARD_HOLDER` خالی است |
-| کانتینر بالا نمی‌آید چون `plans.yaml` نیست | `cp app/config/plans.example.yaml app/config/plans.yaml` |
-| دیتابیس از بین رفت | پوشه `data/` را پاک نکنید؛ آنجا `db.sqlite3` است |
-
-لاگ زنده:
-
-```bash
-docker compose logs -f bot
-```
-
-ورود به کانتینر (در صورت نیاز):
-
-```bash
-docker compose exec bot sh
-```
+| مشکل | راه‌حل |
+|------|--------|
+| ربات جواب نمی‌دهد | `docker compose logs -f bot` |
+| دکمه ادمین نیست | `ADMIN_IDS` را چک کنید + rebuild |
+| auto-provision fail | پنل را تست کنید؛ inbound انتخاب شده؟ subscription فعال؟ |
+| TLS error به پنل | `XUI_VERIFY_SSL=false` (فقط dev) |
+| قیمت قدیمی | `docker compose restart` |
+| Missing settings | `.env` را کامل کنید |
 
 ---
 
-## امنیت
+## مشارکت
 
-- `.env`، پوشه `data/` و `app/config/plans.yaml` در `.gitignore` هستند — در ریپوی عمومی commit نکنید.
-- توکن ربات را مثل رمز عبور بدانید؛ اگر لو رفت از BotFather با `/revoke` عوضش کنید.
-- فقط آیدی ادمین‌های واقعی را در `ADMIN_IDS` بگذارید.
-
----
-
-## ساختار خلاصه پروژه
-
-```text
-.env                         # تنظیمات محرمانه (خودتان می‌سازید)
-app/config/plans.yaml        # پلن و قیمت (خودتان می‌سازید)
-app/config/plans.example.yaml
-app/bot/handlers/            # منطق کاربر و ادمین
-data/                        # دیتابیس SQLite (خودکار ساخته می‌شود)
-docker-compose.yml
-scripts/deploy.sh
-```
+[CONTRIBUTING.md](CONTRIBUTING.md)
 
 ---
 
 ## لایسنس
 
-MIT
+[MIT](LICENSE)

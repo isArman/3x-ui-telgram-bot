@@ -11,4 +11,4 @@ os.makedirs("data", exist_ok=True)
 from app.core.runner import main
 
 if __name__ == "__main__":
-   asyncio.run(main())
+    asyncio.run(main())

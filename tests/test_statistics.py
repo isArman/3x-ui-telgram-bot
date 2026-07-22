@@ -38,7 +38,8 @@ async def test_dashboard_stats_with_data():
             last_name="User"
         )
         session.add(user)
-        
+        await session.flush()
+
         # Create test order
         order = Order(
             user_id=123456789,
@@ -76,11 +77,11 @@ async def test_dashboard_stats_with_data():
         # Get stats
         stats = await get_dashboard_stats(session)
         
-        assert stats['total_users'] >= 1
-        assert stats['total_orders'] >= 1
-        assert stats['pending_payments'] >= 1
-        assert stats['active_accounts'] >= 1
-        assert stats['total_revenue'] >= 150000
+        assert stats['total_users'] == 1
+        assert stats['total_orders'] == 1
+        assert stats['pending_payments'] == 1
+        assert stats['active_accounts'] == 1
+        assert stats['total_revenue'] == 150000
 
 
 @pytest.mark.asyncio
@@ -119,7 +120,7 @@ async def test_expiring_soon_accounts():
         # Get stats
         stats = await get_dashboard_stats(session)
         
-        assert stats['expiring_soon'] >= 1
+        assert stats['expiring_soon'] == 1
 
 
 if __name__ == "__main__":

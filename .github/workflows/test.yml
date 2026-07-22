@@ -1,0 +1,28 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build test image
+        run: docker build -t vpn-bot-test .
+
+      - name: Run pytest
+        run: |
+          docker run --rm \
+            -e BOT_TOKEN=test:1234567890 \
+            -e ADMIN_IDS=1 \
+            -e CARD_NUMBER=1234567890123456 \
+            -e CARD_HOLDER=Test \
+            -e SECRET_KEY=test-ci-secret-key \
+            -v "${{ github.workspace }}:/app" \
+            vpn-bot-test \
+            sh -c "pip install -q pytest pytest-asyncio && python -m pytest tests/ -q"

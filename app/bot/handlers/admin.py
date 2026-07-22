@@ -1,9 +1,18 @@
 from datetime import datetime, timedelta
 
 from aiogram import F, Router
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
+
+from app.bot.auth import deny_non_admin_callback, is_admin
+from app.bot.constants import (
+    ADMIN_MENU_TEXT,
+    BTN_ADMIN_PANEL,
+    CONFIGS_MENU_TEXT,
+    MAIN_MENU_BUTTONS,
+)
+from app.bot.menu_dispatch import dispatch_main_menu
 from sqlalchemy import func, select
 
 from app.bot.keyboards.admin import (
@@ -16,32 +25,27 @@ from app.bot.states import AdminStates
 from app.config.plans_loader import PLANS, get_plan
 from app.config.settings import settings
 from app.config.texts import get_text
-from app.database.models import Order, Payment, PlanConfig, VPNAccount
+from app.database.models import Order, Payment, PlanConfig, User, VPNAccount
 from app.database.session import AsyncSessionLocal
 from app.services.config_inventory import add_config, assign_config, count_available
+from app.services.panel_settings import (
+    PROVISIONING_AUTO,
+    get_panel_settings,
+    is_auto_provisioning_ready,
+)
+from app.services.xui_provisioning import provision_subscription_for_order
 from app.utils.logger import logger
+from app.utils.validation import is_valid_config_text
 
 router = Router()
 
 
-def is_admin(user_id: int) -> bool:
-    return user_id in settings.ADMIN_IDS
-
-
 async def show_configs_menu(message: Message) -> None:
-    await message.answer(
-        "🗂 مدیریت کانفیگ‌های پلن\n\n"
-        "کانفیگ‌ها (لینک subscription یا vless://) را به هر پلن اضافه کنید.\n"
-        "پس از تایید پرداخت، یک کانفیگ آزاد به کاربر ارسال می‌شود.",
-        reply_markup=configs_menu_keyboard(),
-    )
+    await message.answer(CONFIGS_MENU_TEXT, reply_markup=configs_menu_keyboard())
 
 
 async def show_admin_menu(message: Message) -> None:
-    await message.answer(
-        "⚙️ پنل ادمین\n\nیک گزینه را انتخاب کنید:",
-        reply_markup=admin_menu_keyboard(),
-    )
+    await message.answer(ADMIN_MENU_TEXT, reply_markup=admin_menu_keyboard())
 
 
 async def complete_payment_approval(
@@ -51,6 +55,7 @@ async def complete_payment_approval(
     admin_id: int,
     config_text: str,
     plan_config_id: int | None = None,
+    config_ref: str | None = None,
 ) -> None:
     payment.status = "approved"
     payment.reviewed_at = datetime.utcnow()
@@ -60,7 +65,7 @@ async def complete_payment_approval(
     vpn_account = VPNAccount(
         order_id=order.id,
         user_id=order.user_id,
-        config_ref=str(plan_config_id) if plan_config_id else "manual",
+        config_ref=config_ref or (str(plan_config_id) if plan_config_id else "manual"),
         subscription_path=config_text,
         expires_at=datetime.utcnow() + timedelta(days=order.days),
         traffic_limit_gb=order.traffic_gb,
@@ -77,15 +82,90 @@ async def send_config_to_user(bot, user_id: int, config_text: str) -> None:
     )
 
 
+async def _finalize_config_delivery(
+    callback: CallbackQuery,
+    order: Order,
+    payment: Payment,
+    config_text: str,
+    source_label: str,
+    plan_name: str | None = None,
+) -> None:
+    try:
+        await send_config_to_user(callback.bot, order.user_id, config_text)
+    except Exception as exc:
+        logger.error(f"Failed to notify user {order.user_id}: {exc}")
+
+    label = plan_name or order.plan_id or "سفارشی"
+    preview = config_text if len(config_text) <= 120 else config_text[:120] + "..."
+    await callback.message.answer(
+        f"✅ پرداخت تایید شد ({source_label})!\n\n"
+        f"👤 کاربر: {order.user_id}\n"
+        f"📦 پلن: {label}\n"
+        f"🔗 {preview}"
+    )
+    try:
+        await callback.message.edit_caption(
+            caption=(callback.message.caption or "") + f"\n\n✅ تایید ({source_label})"
+        )
+    except Exception:
+        pass
+    await callback.answer("کانفیگ ارسال شد!")
+
+
+async def _try_auto_provision(
+    session,
+    order: Order,
+    user: User,
+) -> str | None:
+    panel = await get_panel_settings(session)
+    if not is_auto_provisioning_ready(panel):
+        return None
+
+    return await provision_subscription_for_order(session, panel, user, order)
+
+
+async def _try_inventory_fallback(
+    session,
+    order: Order,
+) -> PlanConfig | None:
+    if not order.plan_id:
+        return None
+    return await assign_config(session, order.plan_id, order.id)
+
+
 # --- Config inventory admin ---
 
 
+@router.message(
+    StateFilter(AdminStates.waiting_for_config_text),
+    F.text.in_(MAIN_MENU_BUTTONS),
+)
+async def admin_fsm_menu_interrupt(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    await dispatch_main_menu(message, state)
+
+
+@router.message(
+    StateFilter(AdminStates.waiting_for_subscription),
+    F.text.in_(MAIN_MENU_BUTTONS),
+)
+async def admin_subscription_menu_interrupt(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    await message.answer(
+        "⚠️ در حال انتظار ارسال لینک subscription هستید.\n"
+        "لطفاً لینک را ارسال کنید یا از دکمه «❌ لغو» برای انصراف استفاده کنید."
+    )
+
+
 @router.message(Command("admin"))
-@router.message(F.text == "⚙️ پنل ادمین")
-async def admin_menu(message: Message):
+@router.message(F.text == BTN_ADMIN_PANEL)
+async def admin_menu(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         await message.answer("⛔ شما دسترسی ادمین ندارید.")
         return
+    await state.clear()
     await show_admin_menu(message)
 
 
@@ -95,7 +175,7 @@ async def admin_menu_callback(callback: CallbackQuery):
         await callback.answer("دسترسی ندارید!", show_alert=True)
         return
     await callback.message.edit_text(
-        "⚙️ پنل ادمین\n\nیک گزینه را انتخاب کنید:",
+        ADMIN_MENU_TEXT,
         reply_markup=admin_menu_keyboard(),
     )
     await callback.answer()
@@ -107,9 +187,7 @@ async def admin_configs_callback(callback: CallbackQuery):
         await callback.answer("دسترسی ندارید!", show_alert=True)
         return
     await callback.message.edit_text(
-        "🗂 مدیریت کانفیگ‌های پلن\n\n"
-        "کانفیگ‌ها (لینک subscription یا vless://) را به هر پلن اضافه کنید.\n"
-        "پس از تایید پرداخت، یک کانفیگ آزاد به کاربر ارسال می‌شود.",
+        CONFIGS_MENU_TEXT,
         reply_markup=configs_menu_keyboard(),
     )
     await callback.answer()
@@ -130,9 +208,7 @@ async def configs_menu_callback(callback: CallbackQuery):
         return
 
     await callback.message.edit_text(
-        "🗂 مدیریت کانفیگ‌های پلن\n\n"
-        "کانفیگ‌ها (لینک subscription یا vless://) را به هر پلن اضافه کنید.\n"
-        "پس از تایید پرداخت، یک کانفیگ آزاد به کاربر ارسال می‌شود.",
+        CONFIGS_MENU_TEXT,
         reply_markup=configs_menu_keyboard(),
     )
     await callback.answer()
@@ -141,6 +217,7 @@ async def configs_menu_callback(callback: CallbackQuery):
 @router.callback_query(F.data == "configs:stock")
 async def configs_stock(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
+        await callback.answer("دسترسی ندارید!", show_alert=True)
         return
 
     async with AsyncSessionLocal() as session:
@@ -164,6 +241,7 @@ async def configs_stock(callback: CallbackQuery):
 @router.callback_query(F.data == "configs:add")
 async def configs_add_start(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
+        await callback.answer("دسترسی ندارید!", show_alert=True)
         return
 
     await callback.message.answer(
@@ -176,6 +254,7 @@ async def configs_add_start(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("configs:add_plan:"))
 async def configs_add_plan(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
+        await callback.answer("دسترسی ندارید!", show_alert=True)
         return
 
     plan_id = callback.data.split(":")[2]
@@ -203,6 +282,11 @@ async def configs_receive_text(message: Message, state: FSMContext):
         return
 
     config_text = message.text.strip()
+    if not is_valid_config_text(config_text):
+        await message.answer(
+            "❌ فرمت کانفیگ نامعتبر است. لینک http(s):// یا vless:// و مشابه بفرستید."
+        )
+        return
 
     data = await state.get_data()
     plan_id = data.get("config_plan_id")
@@ -249,51 +333,63 @@ async def approve_payment(callback: CallbackQuery, state: FSMContext):
             await callback.answer("سفارش یافت نشد!", show_alert=True)
             return
 
-        if order.plan_id:
-            plan = get_plan(order.plan_id)
-            config_entry = await assign_config(session, order.plan_id, order.id)
+        plan = get_plan(order.plan_id) if order.plan_id else None
+        plan_name = plan["name"] if plan else None
 
-            if config_entry:
-                await complete_payment_approval(
-                    session,
-                    payment,
-                    order,
-                    callback.from_user.id,
-                    config_entry.config_text,
-                    config_entry.id,
-                )
+        user_result = await session.execute(select(User).where(User.id == order.user_id))
+        user = user_result.scalar_one_or_none()
+        if not user:
+            await callback.answer("کاربر یافت نشد!", show_alert=True)
+            return
 
-                try:
-                    await send_config_to_user(
-                        callback.bot, order.user_id, config_entry.config_text
-                    )
-                except Exception as exc:
-                    logger.error(f"Failed to notify user {order.user_id}: {exc}")
+        # 1) Auto provisioning via 3x-ui (if enabled)
+        sub_url = await _try_auto_provision(session, order, user)
+        if sub_url:
+            await complete_payment_approval(
+                session,
+                payment,
+                order,
+                callback.from_user.id,
+                sub_url,
+                config_ref="xui-auto",
+            )
+            logger.info("Auto-provisioned order %s for user %s", order.id, order.user_id)
+            await _finalize_config_delivery(
+                callback, order, payment, sub_url, "خودکار 3x-ui", plan_name
+            )
+            return
 
-                plan_name = plan["name"] if plan else order.plan_id
-                await callback.message.answer(
-                    "✅ پرداخت تایید شد و کانفیگ از موجودی ارسال شد!\n\n"
-                    f"👤 کاربر: {order.user_id}\n"
-                    f"📦 پلن: {plan_name}\n"
-                    f"🆔 کانفیگ #{config_entry.id}\n"
-                    f"🔗 {config_entry.config_text[:80]}..."
-                )
+        # 2) Fallback: manual inventory (pre-stocked configs)
+        config_entry = await _try_inventory_fallback(session, order)
+        if config_entry:
+            await complete_payment_approval(
+                session,
+                payment,
+                order,
+                callback.from_user.id,
+                config_entry.config_text,
+                config_entry.id,
+            )
+            logger.info(f"Assigned config {config_entry.id} to order {order.id}")
+            await _finalize_config_delivery(
+                callback,
+                order,
+                payment,
+                config_entry.config_text,
+                "انبار دستی",
+                plan_name,
+            )
+            return
 
-                try:
-                    await callback.message.edit_caption(
-                        caption=(callback.message.caption or "") + "\n\n✅ تایید + ارسال کانفیگ"
-                    )
-                except Exception:
-                    pass
-
-                await callback.answer("کانفیگ ارسال شد!")
-                logger.info(f"Assigned config {config_entry.id} to order {order.id}")
-                return
-
-            plan_name = plan["name"] if plan else order.plan_id
+        if order.plan_id and plan_name:
             await callback.message.answer(
-                f"⚠️ برای پلن «{plan_name}» کانفیگ آزاد وجود ندارد.\n"
-                f"از /configs کانفیگ اضافه کنید یا لینک را دستی ارسال کنید."
+                f"⚠️ ساخت خودکار ناموفق و موجودی پلن «{plan_name}» خالی است.\n"
+                f"لینک را دستی ارسال کنید یا از /configs کانفیگ اضافه کنید."
+            )
+        elif (await get_panel_settings(session)).provisioning_mode == PROVISIONING_AUTO:
+            await callback.message.answer(
+                "⚠️ ساخت خودکار در 3x-ui ناموفق بود.\n"
+                "لینک subscription را دستی ارسال کنید."
             )
 
         await state.update_data(payment_id=payment_id, order_id=order.id)
@@ -301,14 +397,14 @@ async def approve_payment(callback: CallbackQuery, state: FSMContext):
 
         plan_note = ""
         if order.plan_id:
-            plan = get_plan(order.plan_id)
-            plan_note = f"\n📦 پلن: {plan['name'] if plan else order.plan_id} (بدون موجودی)"
+            plan_note = f"\n📦 پلن: {plan_name or order.plan_id}"
 
         await callback.message.answer(
-            f"✅ پرداخت تایید شد!{plan_note}\n\n"
+            f"⏳ پرداخت در انتظار ارسال لینک{plan_note}\n\n"
             f"👤 کاربر: {order.user_id}\n"
             f"⏱ {order.days} روز | 📊 {order.traffic_gb} GB\n\n"
-            "لطفاً لینک/کانفیگ را ارسال کنید:"
+            "لطفاً لینک subscription را ارسال کنید:\n"
+            "(یا «❌ لغو» برای انصراف)"
         )
         await callback.answer()
 
@@ -318,11 +414,25 @@ async def receive_subscription(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
 
+    if message.text == "❌ لغو":
+        await state.clear()
+        await message.answer(
+            "ارسال لینک لغو شد. پرداخت همچنان در انتظار است.",
+            reply_markup=admin_menu_keyboard(),
+        )
+        return
+
     if not message.text or not message.text.strip():
         await message.answer("❌ لطفاً لینک/کانفیگ را به صورت متن ارسال کنید.")
         return
 
     config_text = message.text.strip()
+    if not is_valid_config_text(config_text):
+        await message.answer(
+            "❌ فرمت کانفیگ نامعتبر است. لینک http(s):// یا vless:// و مشابه بفرستید."
+        )
+        return
+
     data = await state.get_data()
     payment_id = data.get("payment_id")
     order_id = data.get("order_id")

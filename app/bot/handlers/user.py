@@ -10,19 +10,55 @@ from app.config.settings import settings
 from app.config.plans_loader import PLANS, PRICING, get_plan
 from app.database.models import User, Order, Payment
 from app.database.session import AsyncSessionLocal
+from app.bot.constants import (
+    BACK_BUTTON,
+    BTN_ADMIN_PANEL,
+    BTN_BUY_PLAN,
+    BTN_CUSTOM_PLAN,
+    BTN_MY_ACCOUNTS,
+    BTN_MY_ORDERS,
+    CANCEL_BUTTON,
+    FLOW_NAV_BUTTONS,
+    MAIN_MENU_BUTTONS,
+    ORDER_STATUS_LABELS,
+)
 from app.bot.states import CustomPlanStates, PaymentStates
 from app.bot.keyboards.user import (
     main_menu_keyboard,
     plans_keyboard,
     confirm_order_keyboard,
-    cancel_keyboard,
+    flow_nav_keyboard,
 )
+from app.services.users import get_or_create_user
 
 router = Router()
 
 
 def user_main_menu(user_id: int):
     return main_menu_keyboard(is_admin=user_id in settings.ADMIN_IDS)
+
+
+def build_plans_text() -> str:
+    text = get_text("plans_list")
+    for plan in PLANS:
+        text += get_text("plan_details", **plan) + "\n"
+    return text
+
+
+async def send_plans_menu(bot, chat_id: int) -> None:
+    await bot.send_message(
+        chat_id=chat_id,
+        text=build_plans_text(),
+        reply_markup=plans_keyboard(PLANS),
+    )
+
+
+async def send_main_menu_message(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await message.answer(
+        get_text("start"),
+        reply_markup=user_main_menu(message.from_user.id),
+    )
 
 
 def calculate_custom_price(days: int, traffic_gb: int) -> int:
@@ -58,31 +94,17 @@ def resolve_order_pricing(data: dict):
     return None, days, traffic, calculate_custom_price(days, traffic)
 
 
-async def get_or_create_user(session: AsyncSession, message: Message) -> User:
-    """Get or create user"""
-    result = await session.execute(select(User).where(User.id == message.from_user.id))
-    user = result.scalar_one_or_none()
-    
-    if not user:
-        user = User(
-            id=message.from_user.id,
-            username=message.from_user.username,
-            first_name=message.from_user.first_name,
-            last_name=message.from_user.last_name
-        )
-        session.add(user)
-        await session.commit()
-    
-    return user
+async def get_or_create_user_from_message(session: AsyncSession, message: Message) -> User:
+    return await get_or_create_user(session, message.from_user)
 
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     """Start command handler"""
     await state.clear()
-    
+
     async with AsyncSessionLocal() as session:
-        await get_or_create_user(session, message)
+        await get_or_create_user_from_message(session, message)
     
     await message.answer(
         get_text("start"),
@@ -90,17 +112,13 @@ async def cmd_start(message: Message, state: FSMContext):
     )
 
 
-@router.message(F.text == "📦 خرید پلن")
-async def show_plans(message: Message):
+@router.message(F.text == BTN_BUY_PLAN)
+async def show_plans(message: Message, state: FSMContext):
     """Show available plans"""
-    text = get_text("plans_list")
-    
-    for plan in PLANS:
-        text += get_text("plan_details", **plan) + "\n"
-    
+    await state.clear()
     await message.answer(
-        text,
-        reply_markup=plans_keyboard(PLANS)
+        build_plans_text(),
+        reply_markup=plans_keyboard(PLANS),
     )
 
 
@@ -108,7 +126,7 @@ async def show_plans(message: Message):
 async def select_plan(callback: CallbackQuery, state: FSMContext):
     """Handle plan selection"""
     plan_id = callback.data.split(":")[1]
-    plan = next((p for p in PLANS if p["id"] == plan_id), None)
+    plan = get_plan(plan_id)
     
     if not plan:
         await callback.answer("پلن یافت نشد!", show_alert=True)
@@ -124,12 +142,12 @@ async def select_plan(callback: CallbackQuery, state: FSMContext):
     
     await callback.message.edit_text(
         get_text("custom_plan_confirm", **plan),
-        reply_markup=confirm_order_keyboard()
+        reply_markup=confirm_order_keyboard("back:plans"),
     )
     await callback.answer()
 
 
-@router.message(F.text == "🎨 پلن سفارشی")
+@router.message(F.text == BTN_CUSTOM_PLAN)
 async def custom_plan_start(message: Message, state: FSMContext):
     """Start custom plan flow"""
     # Clear any leftover plan_id from a previously selected ready-made plan
@@ -137,58 +155,89 @@ async def custom_plan_start(message: Message, state: FSMContext):
     await state.set_state(CustomPlanStates.waiting_for_days)
     await message.answer(
         get_text("custom_plan_start"),
-        reply_markup=cancel_keyboard()
+        reply_markup=flow_nav_keyboard(),
     )
+
+
+@router.message(CustomPlanStates.waiting_for_days, F.text == BACK_BUTTON)
+async def custom_plan_days_back(message: Message, state: FSMContext):
+    await send_main_menu_message(message, state)
+
+
+@router.message(CustomPlanStates.waiting_for_days, F.text == CANCEL_BUTTON)
+async def custom_plan_days_cancel(message: Message, state: FSMContext):
+    await send_main_menu_message(message, state)
 
 
 @router.message(CustomPlanStates.waiting_for_days)
 async def custom_plan_days(message: Message, state: FSMContext):
     """Handle custom plan days input"""
-    if message.text == "❌ لغو":
-        await state.clear()
-        await message.answer("لغو شد.", reply_markup=user_main_menu(message.from_user.id))
-        return
-    
     try:
         days = int(message.text)
         if not 1 <= days <= 365:
             await message.answer(get_text("error_out_of_range"))
             return
-        
+
         await state.update_data(days=days)
         await state.set_state(CustomPlanStates.waiting_for_traffic)
-        await message.answer(get_text("custom_plan_traffic"))
+        await message.answer(
+            get_text("custom_plan_traffic"),
+            reply_markup=flow_nav_keyboard(),
+        )
     except ValueError:
         await message.answer(get_text("error_invalid_number"))
+
+
+@router.message(CustomPlanStates.waiting_for_traffic, F.text == BACK_BUTTON)
+async def custom_plan_traffic_back(message: Message, state: FSMContext):
+    await state.set_state(CustomPlanStates.waiting_for_days)
+    await message.answer(
+        get_text("custom_plan_start"),
+        reply_markup=flow_nav_keyboard(),
+    )
+
+
+@router.message(CustomPlanStates.waiting_for_traffic, F.text == CANCEL_BUTTON)
+async def custom_plan_traffic_cancel(message: Message, state: FSMContext):
+    await send_main_menu_message(message, state)
 
 
 @router.message(CustomPlanStates.waiting_for_traffic)
 async def custom_plan_traffic(message: Message, state: FSMContext):
     """Handle custom plan traffic input"""
-    if message.text == "❌ لغو":
-        await state.clear()
-        await message.answer("لغو شد.", reply_markup=user_main_menu(message.from_user.id))
-        return
-    
     try:
         traffic = int(message.text)
         if not 1 <= traffic <= 500:
             await message.answer(get_text("error_out_of_range"))
             return
-        
+
         data = await state.get_data()
         days = data["days"]
         price = calculate_custom_price(days, traffic)
-        
+
         await state.update_data(traffic=traffic, price=price, plan_id=None)
-        
+
         await message.answer(
             get_text("custom_plan_confirm", days=days, traffic=traffic, price=price),
-            reply_markup=confirm_order_keyboard()
+            reply_markup=confirm_order_keyboard("back:custom_traffic"),
         )
         await state.set_state(CustomPlanStates.waiting_for_confirm)
     except ValueError:
         await message.answer(get_text("error_invalid_number"))
+
+
+@router.message(CustomPlanStates.waiting_for_confirm, F.text == BACK_BUTTON)
+async def custom_plan_confirm_back(message: Message, state: FSMContext):
+    await state.set_state(CustomPlanStates.waiting_for_traffic)
+    await message.answer(
+        get_text("custom_plan_traffic"),
+        reply_markup=flow_nav_keyboard(),
+    )
+
+
+@router.message(CustomPlanStates.waiting_for_confirm, F.text == CANCEL_BUTTON)
+async def custom_plan_confirm_cancel(message: Message, state: FSMContext):
+    await send_main_menu_message(message, state)
 
 
 @router.callback_query(F.data == "confirm_order")
@@ -227,19 +276,7 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext):
     
     try:
         async with AsyncSessionLocal() as session:
-            # Ensure user exists (required by FK)
-            user_result = await session.execute(select(User).where(User.id == callback.from_user.id))
-            user = user_result.scalar_one_or_none()
-            
-            if not user:
-                user = User(
-                    id=callback.from_user.id,
-                    username=callback.from_user.username,
-                    first_name=callback.from_user.first_name,
-                    last_name=callback.from_user.last_name
-                )
-                session.add(user)
-                await session.flush()
+            user = await get_or_create_user(session, callback.from_user)
             
             # Create order with server-resolved pricing
             order = Order(
@@ -255,14 +292,17 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext):
             await session.refresh(order)
 
         # Send payment instructions
-        await callback.message.edit_text(
-            get_text(
+        await callback.message.delete()
+        await callback.bot.send_message(
+            chat_id=callback.from_user.id,
+            text=get_text(
                 "order_created",
                 order_id=order.id,
                 price=order.price,
                 card_number=settings.CARD_NUMBER,
-                card_holder=settings.CARD_HOLDER
-            )
+                card_holder=settings.CARD_HOLDER,
+            ),
+            reply_markup=flow_nav_keyboard(),
         )
 
         # Set state to wait for receipt
@@ -283,8 +323,49 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext):
             reply_markup=user_main_menu(callback.from_user.id),
         )
         await state.clear()
+        await callback.answer("خطا در ایجاد سفارش", show_alert=True)
         return
     
+    await callback.answer()
+
+
+@router.callback_query(F.data == "back:main")
+async def back_to_main(callback: CallbackQuery, state: FSMContext):
+    """Return to main menu from inline keyboards."""
+    await state.clear()
+    await callback.message.delete()
+    await callback.bot.send_message(
+        chat_id=callback.from_user.id,
+        text=get_text("start"),
+        reply_markup=user_main_menu(callback.from_user.id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "back:plans")
+async def back_to_plans(callback: CallbackQuery, state: FSMContext):
+    """Return to plans list from plan confirmation."""
+    await state.clear()
+    await callback.message.delete()
+    await send_plans_menu(callback.bot, callback.from_user.id)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "back:custom_traffic")
+async def back_to_custom_traffic(callback: CallbackQuery, state: FSMContext):
+    """Return to custom traffic step from confirmation."""
+    data = await state.get_data()
+    if "days" not in data:
+        await callback.answer("اطلاعات سفارش یافت نشد.", show_alert=True)
+        return
+
+    await state.set_state(CustomPlanStates.waiting_for_traffic)
+    await callback.message.delete()
+    await callback.bot.send_message(
+        chat_id=callback.from_user.id,
+        text=get_text("custom_plan_traffic"),
+        reply_markup=flow_nav_keyboard(),
+    )
     await callback.answer()
 
 
@@ -299,6 +380,25 @@ async def cancel_order(callback: CallbackQuery, state: FSMContext):
         reply_markup=user_main_menu(callback.from_user.id)
     )
     await callback.answer()
+
+
+@router.message(PaymentStates.waiting_for_receipt, F.text == BACK_BUTTON)
+async def payment_back(message: Message, state: FSMContext):
+    data = await state.get_data()
+    order_id = data.get("order_id")
+    await state.clear()
+    note = ""
+    if order_id:
+        note = f"\n\n🔢 سفارش #{order_id} همچنان ثبت است. برای پرداخت دوباره «خرید پلن» را بزنید."
+    await message.answer(
+        get_text("start") + note,
+        reply_markup=user_main_menu(message.from_user.id),
+    )
+
+
+@router.message(PaymentStates.waiting_for_receipt, F.text == CANCEL_BUTTON)
+async def payment_cancel(message: Message, state: FSMContext):
+    await payment_back(message, state)
 
 
 @router.message(PaymentStates.waiting_for_receipt, F.photo)
@@ -354,19 +454,8 @@ async def receive_receipt(message: Message, state: FSMContext):
             return
 
         # Ensure user row exists for FK (e.g. edge cases)
-        user_result = await session.execute(
-            select(User).where(User.id == message.from_user.id)
-        )
-        if not user_result.scalar_one_or_none():
-            session.add(
-                User(
-                    id=message.from_user.id,
-                    username=message.from_user.username,
-                    first_name=message.from_user.first_name,
-                    last_name=message.from_user.last_name,
-                )
-            )
-            await session.flush()
+        await get_or_create_user(session, message.from_user)
+        await session.flush()
 
         order.status = "paid"
         
@@ -405,31 +494,29 @@ async def receive_receipt(message: Message, state: FSMContext):
                     caption=admin_text,
                     reply_markup=payment_review_keyboard(payment.id)
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                from app.utils.logger import logger
+                logger.warning("Failed to notify admin %s about payment %s: %s", admin_id, payment.id, exc)
     
     await state.clear()
 
 
-_MENU_BUTTONS = {
-    "📦 خرید پلن",
-    "🎨 پلن سفارشی",
-    "📋 سفارش‌های من",
-    "💳 اکانت‌های من",
-    "⚙️ پنل ادمین",
-    "❌ لغو",
-}
+_MENU_BUTTONS = MAIN_MENU_BUTTONS | FLOW_NAV_BUTTONS
 
 
 @router.message(PaymentStates.waiting_for_receipt, ~F.text.in_(_MENU_BUTTONS))
 async def receive_receipt_invalid(message: Message):
     """Remind user to send a photo while waiting for receipt."""
-    await message.answer("لطفاً تصویر رسید پرداخت را ارسال کنید.")
+    await message.answer(
+        "لطفاً تصویر رسید پرداخت را ارسال کنید.\n"
+        f"یا از «{BACK_BUTTON}» برای برگشت به منو استفاده کنید."
+    )
 
 
-@router.message(F.text == "📋 سفارش‌های من")
-async def my_orders(message: Message):
+@router.message(F.text == BTN_MY_ORDERS)
+async def my_orders(message: Message, state: FSMContext):
     """Show user orders"""
+    await state.clear()
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(Order)
@@ -439,18 +526,15 @@ async def my_orders(message: Message):
         orders = result.scalars().all()
         
         if not orders:
-            await message.answer(get_text("no_orders"))
+            await message.answer(
+                get_text("no_orders"),
+                reply_markup=user_main_menu(message.from_user.id),
+            )
             return
         
         text = get_text("my_orders") + "\n\n"
         
-        status_map = {
-            "pending": "در انتظار پرداخت",
-            "paid": "در انتظار تایید",
-            "approved": "تایید شده",
-            "rejected": "رد شده",
-            "completed": "تکمیل شده"
-        }
+        status_map = ORDER_STATUS_LABELS
         
         for order in orders:
             text += get_text(
@@ -463,12 +547,16 @@ async def my_orders(message: Message):
                 created_at=order.created_at.strftime("%Y-%m-%d %H:%M")
             ) + "\n"
         
-        await message.answer(text)
+        await message.answer(
+            text,
+            reply_markup=user_main_menu(message.from_user.id),
+        )
 
 
-@router.message(F.text == "💳 اکانت‌های من")
-async def my_accounts(message: Message):
+@router.message(F.text == BTN_MY_ACCOUNTS)
+async def my_accounts(message: Message, state: FSMContext):
     """Show user's VPN accounts"""
+    await state.clear()
     from app.utils.logger import logger
     from app.database.models import VPNAccount
     from datetime import datetime
@@ -512,7 +600,10 @@ async def my_accounts(message: Message):
             text += "برای تمدید اکانت با ادمین تماس بگیرید."
             
             # No parse_mode: config URLs often contain characters that break Markdown
-            await message.answer(text)
+            await message.answer(
+                text,
+                reply_markup=user_main_menu(message.from_user.id),
+            )
             logger.info(f"User {message.from_user.id} viewed their accounts")
             
     except Exception as e:

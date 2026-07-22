@@ -2,20 +2,40 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMar
 from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
 from typing import List, Dict, Any
 
+from app.bot.constants import (
+    BACK_BUTTON,
+    BTN_ADMIN_PANEL,
+    BTN_BUY_PLAN,
+    BTN_CUSTOM_PLAN,
+    BTN_MY_ACCOUNTS,
+    BTN_MY_ORDERS,
+    CANCEL_BUTTON,
+)
+
 
 def main_menu_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
     """Main menu keyboard"""
     builder = ReplyKeyboardBuilder()
     builder.row(
-        KeyboardButton(text="📦 خرید پلن"),
-        KeyboardButton(text="🎨 پلن سفارشی")
+        KeyboardButton(text=BTN_BUY_PLAN),
+        KeyboardButton(text=BTN_CUSTOM_PLAN),
     )
     builder.row(
-        KeyboardButton(text="📋 سفارش‌های من"),
-        KeyboardButton(text="💳 اکانت‌های من")
+        KeyboardButton(text=BTN_MY_ORDERS),
+        KeyboardButton(text=BTN_MY_ACCOUNTS),
     )
     if is_admin:
-        builder.row(KeyboardButton(text="⚙️ پنل ادمین"))
+        builder.row(KeyboardButton(text=BTN_ADMIN_PANEL))
+    return builder.as_markup(resize_keyboard=True)
+
+
+def flow_nav_keyboard() -> ReplyKeyboardMarkup:
+    """Back / cancel keyboard for multi-step user flows."""
+    builder = ReplyKeyboardBuilder()
+    builder.row(
+        KeyboardButton(text=BACK_BUTTON),
+        KeyboardButton(text=CANCEL_BUTTON),
+    )
     return builder.as_markup(resize_keyboard=True)
 
 
@@ -27,49 +47,25 @@ def plans_keyboard(plans: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
         builder.row(
             InlineKeyboardButton(
                 text=f"{plan['name']} - {plan['price']:,} تومان",
-                callback_data=f"plan:{plan['id']}"
+                callback_data=f"plan:{plan['id']}",
             )
         )
 
     builder.row(
-        InlineKeyboardButton(text="🔙 بازگشت", callback_data="back_to_main")
+        InlineKeyboardButton(text=BACK_BUTTON, callback_data="back:main"),
     )
 
     return builder.as_markup()
 
 
-def confirm_order_keyboard() -> InlineKeyboardMarkup:
+def confirm_order_keyboard(back_callback: str = "back:plans") -> InlineKeyboardMarkup:
     """Order confirmation keyboard"""
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(text="✅ تایید", callback_data="confirm_order"),
-        InlineKeyboardButton(text="❌ لغو", callback_data="cancel_order")
     )
-    return builder.as_markup()
-
-
-def cancel_keyboard() -> ReplyKeyboardMarkup:
-    """Cancel keyboard"""
-    builder = ReplyKeyboardBuilder()
-    builder.row(KeyboardButton(text="❌ لغو"))
-    return builder.as_markup(resize_keyboard=True)
-
-
-def account_actions_keyboard(account_id: int, can_renew: bool = True) -> InlineKeyboardMarkup:
-    """Actions for a VPN account"""
-    builder = InlineKeyboardBuilder()
-
-    if can_renew:
-        builder.row(
-            InlineKeyboardButton(text="🔄 تمدید اکانت", callback_data=f"renew_account:{account_id}")
-        )
-
     builder.row(
-        InlineKeyboardButton(text="📊 وضعیت اکانت", callback_data=f"check_status:{account_id}")
+        InlineKeyboardButton(text=BACK_BUTTON, callback_data=back_callback),
+        InlineKeyboardButton(text=CANCEL_BUTTON, callback_data="cancel_order"),
     )
-
-    builder.row(
-        InlineKeyboardButton(text="🔙 بازگشت", callback_data="back_to_accounts")
-    )
-
     return builder.as_markup()

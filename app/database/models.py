@@ -92,3 +92,21 @@ class PlanConfig(Base):
     created_by: Mapped[int] = mapped_column(BigInteger, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     assigned_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class PanelSettings(Base):
+    """Singleton (id=1) — 3x-ui panel connection and provisioning options."""
+
+    __tablename__ = "panel_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    panel_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    panel_username: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    panel_password: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    subscription_base_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    provisioning_mode: Mapped[str] = mapped_column(String(20), default="manual")
+    selected_inbound_ids: Mapped[str] = mapped_column(Text, default="[]")
+    is_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )

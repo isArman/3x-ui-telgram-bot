@@ -23,7 +23,16 @@ def _parse_admin_ids(value: str) -> List[int]:
     return [int(part.strip()) for part in value.split(",") if part.strip().isdigit()]
 
 
+def _parse_bool(value: str, default: bool = True) -> bool:
+    if not value:
+        return default
+    return value.strip().lower() in ("1", "true", "yes", "on")
+
+
 class Settings:
+    BASE_DIR: Path = Path(__file__).parent.parent.parent
+    DATA_DIR: Path = BASE_DIR / "data"
+
     @property
     def BOT_TOKEN(self) -> str:
         return get_env("BOT_TOKEN")
@@ -40,12 +49,23 @@ class Settings:
     def CARD_HOLDER(self) -> str:
         return get_env("CARD_HOLDER")
 
-    BASE_DIR: Path = Path(__file__).parent.parent.parent
-    DATA_DIR: Path = BASE_DIR / "data"
-
     @property
     def ADMIN_IDS(self) -> List[int]:
         return _parse_admin_ids(get_env("ADMIN_IDS"))
+
+    @property
+    def SECRET_KEY(self) -> str:
+        """Used to encrypt panel credentials at rest. Generate with Fernet.generate_key()."""
+        return get_env("SECRET_KEY")
+
+    @property
+    def XUI_VERIFY_SSL(self) -> bool:
+        """Verify TLS certificates when connecting to 3x-ui panel."""
+        return _parse_bool(get_env("XUI_VERIFY_SSL", "true"), default=True)
+
+    @property
+    def LOG_LEVEL(self) -> str:
+        return get_env("LOG_LEVEL", "INFO").upper()
 
     def validate(self):
         required = {
