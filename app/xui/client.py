@@ -13,6 +13,47 @@ class XUIError(Exception):
     pass
 
 
+def prepare_client_update_payload(
+    existing_detail: dict[str, Any],
+    *,
+    email: str,
+    total_bytes: int,
+    expiry_ms: int,
+    comment: str,
+) -> dict[str, Any]:
+    """
+    Build the JSON body for POST /panel/api/clients/update/:email.
+
+    GET returns a numeric DB row id in client.id, but UPDATE expects the protocol
+    UUID as a string — sending the number triggers a Go unmarshal error.
+    """
+    old = dict(existing_detail.get("client") or {})
+    payload: dict[str, Any] = {
+        "email": email,
+        "enable": True,
+        "totalGB": total_bytes,
+        "expiryTime": expiry_ms,
+        "comment": comment,
+        "limitIp": old.get("limitIp", 0),
+        "tgId": old.get("tgId", 0),
+    }
+
+    for key in ("subId", "flow", "password", "auth"):
+        value = old.get(key)
+        if value not in (None, ""):
+            payload[key] = value
+
+    protocol_id = old.get("id")
+    if isinstance(protocol_id, str) and protocol_id:
+        payload["id"] = protocol_id
+    else:
+        uuid_val = existing_detail.get("uuid") or old.get("uuid")
+        if uuid_val:
+            payload["id"] = str(uuid_val)
+
+    return payload
+
+
 class XUIClient:
     def __init__(
         self,
@@ -212,12 +253,13 @@ class XUIClient:
     ) -> dict[str, Any]:
         existing = await self.get_client(email)
         if existing and existing.get("client"):
-            client = dict(existing["client"])
-            client["email"] = email
-            client["totalGB"] = total_bytes
-            client["expiryTime"] = expiry_ms
-            client["comment"] = comment
-            client["enable"] = True
+            client = prepare_client_update_payload(
+                existing,
+                email=email,
+                total_bytes=total_bytes,
+                expiry_ms=expiry_ms,
+                comment=comment,
+            )
             return await self.update_client(email, client, inbound_ids)
         return await self.add_client(
             email, inbound_ids, total_bytes, expiry_ms, comment

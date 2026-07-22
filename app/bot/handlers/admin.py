@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from aiogram import F, Router
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
 
 from app.bot.auth import deny_non_admin_callback, is_admin
 from app.bot.constants import (
@@ -16,6 +16,7 @@ from app.bot.menu_dispatch import dispatch_main_menu
 from sqlalchemy import func, select
 
 from app.bot.keyboards.admin import (
+    admin_cancel_keyboard,
     admin_menu_keyboard,
     configs_menu_keyboard,
     payment_review_keyboard,
@@ -510,8 +511,8 @@ async def approve_payment(callback: CallbackQuery, state: FSMContext):
             f"⏳ پرداخت در انتظار ارسال لینک{plan_note}\n\n"
             f"👤 کاربر: {order.user_id}\n"
             f"⏱ {order.days} روز | 📊 {order.traffic_gb} GB\n\n"
-            "لطفاً لینک subscription را ارسال کنید:\n"
-            "(یا «❌ لغو» برای انصراف)"
+            "لطفاً لینک subscription را ارسال کنید:",
+            reply_markup=admin_cancel_keyboard(),
         )
         await callback.answer()
 
@@ -525,8 +526,9 @@ async def receive_subscription(message: Message, state: FSMContext):
         await state.clear()
         await message.answer(
             "ارسال لینک لغو شد. پرداخت همچنان در انتظار است.",
-            reply_markup=admin_menu_keyboard(),
+            reply_markup=ReplyKeyboardRemove(),
         )
+        await show_admin_menu(message)
         return
 
     if not message.text or not message.text.strip():
@@ -567,8 +569,10 @@ async def receive_subscription(message: Message, state: FSMContext):
         try:
             await send_config_to_user(message.bot, order.user_id, config_text)
             await message.answer(
-                f"✅ کانفیگ ارسال شد!\n👤 کاربر: {order.user_id}\n🔗 {config_text}"
+                f"✅ کانفیگ ارسال شد!\n👤 کاربر: {order.user_id}\n🔗 {config_text}",
+                reply_markup=ReplyKeyboardRemove(),
             )
+            await show_admin_menu(message)
         except Exception as exc:
             logger.error(f"Failed to notify user: {exc}")
             await message.answer(f"⚠️ خطا در ارسال به کاربر: {exc}")

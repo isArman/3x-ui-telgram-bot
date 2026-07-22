@@ -1,5 +1,19 @@
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.types import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+)
+from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
+
+from app.bot.constants import CANCEL_BUTTON
+
+
+def admin_cancel_keyboard() -> ReplyKeyboardMarkup:
+    """Single cancel button for admin FSM flows."""
+    builder = ReplyKeyboardBuilder()
+    builder.row(KeyboardButton(text=CANCEL_BUTTON))
+    return builder.as_markup(resize_keyboard=True)
 
 
 def payment_review_keyboard(payment_id: int) -> InlineKeyboardMarkup:
