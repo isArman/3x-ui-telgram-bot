@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.texts import get_text
 from app.config.settings import settings
-from app.config.plans_loader import PLANS, PRICING
+from app.config.plans_loader import PLANS, PRICING, get_plan
 from app.database.models import User, Order, Payment
 from app.database.session import AsyncSessionLocal
 from app.bot.states import CustomPlanStates, PaymentStates
@@ -16,7 +16,6 @@ from app.bot.keyboards.user import (
     plans_keyboard,
     confirm_order_keyboard,
     cancel_keyboard,
-    account_actions_keyboard,
 )
 
 router = Router()
@@ -29,6 +28,34 @@ def user_main_menu(user_id: int):
 def calculate_custom_price(days: int, traffic_gb: int) -> int:
     """Calculate price for custom plan"""
     return (days * PRICING["per_day"]) + (traffic_gb * PRICING["per_gb"])
+
+
+def resolve_order_pricing(data: dict):
+    """
+    Resolve authoritative plan pricing on the server.
+
+    Ready-made plans: days/traffic/price come from plans.yaml via plan_id.
+    Custom plans: recompute price from days/traffic + pricing formula.
+
+    Returns (plan_id, days, traffic_gb, price) or None if invalid.
+    """
+    plan_id = data.get("plan_id")
+    if plan_id:
+        plan = get_plan(plan_id)
+        if not plan:
+            return None
+        return plan_id, int(plan["days"]), int(plan["traffic"]), int(plan["price"])
+
+    try:
+        days = int(data["days"])
+        traffic = int(data["traffic"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+    if not 1 <= days <= 365 or not 1 <= traffic <= 500:
+        return None
+
+    return None, days, traffic, calculate_custom_price(days, traffic)
 
 
 async def get_or_create_user(session: AsyncSession, message: Message) -> User:
@@ -186,18 +213,21 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext):
         return
     
     data = await state.get_data()
+    resolved = resolve_order_pricing(data)
 
-    if not all(key in data for key in ("days", "traffic", "price")):
+    if not resolved:
         await callback.answer(
-            "اطلاعات سفارش ناقص است. لطفاً دوباره پلن را انتخاب کنید.",
+            "اطلاعات سفارش نامعتبر است. لطفاً دوباره پلن را انتخاب کنید.",
             show_alert=True,
         )
         await state.clear()
         return
+
+    plan_id, days, traffic_gb, price = resolved
     
     try:
         async with AsyncSessionLocal() as session:
-            # Ensure user exists
+            # Ensure user exists (required by FK)
             user_result = await session.execute(select(User).where(User.id == callback.from_user.id))
             user = user_result.scalar_one_or_none()
             
@@ -211,13 +241,13 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext):
                 session.add(user)
                 await session.flush()
             
-            # Create order
+            # Create order with server-resolved pricing
             order = Order(
                 user_id=callback.from_user.id,
-                days=data["days"],
-                traffic_gb=data["traffic"],
-                price=data["price"],
-                plan_id=data.get("plan_id"),
+                days=days,
+                traffic_gb=traffic_gb,
+                price=price,
+                plan_id=plan_id,
                 status="pending",
             )
             session.add(order)
@@ -285,7 +315,6 @@ async def receive_receipt(message: Message, state: FSMContext):
     photo = message.photo[-1]
     
     async with AsyncSessionLocal() as session:
-        # Update order status
         result = await session.execute(select(Order).where(Order.id == order_id))
         order = result.scalar_one_or_none()
 
@@ -302,9 +331,45 @@ async def receive_receipt(message: Message, state: FSMContext):
             await state.clear()
             return
 
+        # One pending (or already approved) payment per order
+        existing_result = await session.execute(
+            select(Payment).where(
+                Payment.order_id == order_id,
+                Payment.status.in_(("pending", "approved")),
+            )
+        )
+        existing_payment = existing_result.scalar_one_or_none()
+        if existing_payment:
+            if existing_payment.status == "approved":
+                await message.answer(
+                    "این سفارش قبلاً تایید شده است.",
+                    reply_markup=user_main_menu(message.from_user.id),
+                )
+            else:
+                await message.answer(
+                    "رسید قبلی شما هنوز در انتظار بررسی ادمین است.",
+                    reply_markup=user_main_menu(message.from_user.id),
+                )
+            await state.clear()
+            return
+
+        # Ensure user row exists for FK (e.g. edge cases)
+        user_result = await session.execute(
+            select(User).where(User.id == message.from_user.id)
+        )
+        if not user_result.scalar_one_or_none():
+            session.add(
+                User(
+                    id=message.from_user.id,
+                    username=message.from_user.username,
+                    first_name=message.from_user.first_name,
+                    last_name=message.from_user.last_name,
+                )
+            )
+            await session.flush()
+
         order.status = "paid"
         
-        # Create payment record
         payment = Payment(
             order_id=order_id,
             user_id=message.from_user.id,
@@ -315,13 +380,11 @@ async def receive_receipt(message: Message, state: FSMContext):
         await session.commit()
         await session.refresh(payment)
         
-        # Notify user
         await message.answer(
             get_text("receipt_received"),
             reply_markup=user_main_menu(message.from_user.id)
         )
         
-        # Notify admins
         from app.bot.keyboards.admin import payment_review_keyboard
         
         admin_text = get_text(

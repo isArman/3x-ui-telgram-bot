@@ -1,7 +1,9 @@
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import String, Integer, BigInteger, DateTime, Text, Boolean
+
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
+
 from .base import Base
 
 
@@ -20,22 +22,30 @@ class Order(Base):
     __tablename__ = "orders"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.id"), nullable=False, index=True
+    )
     days: Mapped[int] = mapped_column(Integer, nullable=False)
     traffic_gb: Mapped[int] = mapped_column(Integer, nullable=False)
     price: Mapped[int] = mapped_column(Integer, nullable=False)
     plan_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="pending")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
 
 
 class Payment(Base):
     __tablename__ = "payments"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    order_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    order_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("orders.id"), nullable=False, index=True
+    )
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.id"), nullable=False, index=True
+    )
     receipt_file_id: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(String(50), default="pending")  # pending, approved, rejected
     admin_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -48,8 +58,12 @@ class VPNAccount(Base):
     __tablename__ = "vpn_accounts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    order_id: Mapped[int] = mapped_column(Integer, nullable=False, unique=True)
-    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    order_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("orders.id"), nullable=False, unique=True
+    )
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.id"), nullable=False, index=True
+    )
     config_ref: Mapped[str] = mapped_column(String(255), nullable=False)
     subscription_path: Mapped[str] = mapped_column(Text, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
@@ -58,7 +72,9 @@ class VPNAccount(Base):
     expiry_notified: Mapped[bool] = mapped_column(Boolean, default=False)
     last_renewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
 
 
 class PlanConfig(Base):
@@ -67,10 +83,12 @@ class PlanConfig(Base):
     __tablename__ = "plan_configs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    plan_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    plan_id: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     config_text: Mapped[str] = mapped_column(Text, nullable=False)
     is_assigned: Mapped[bool] = mapped_column(Boolean, default=False)
-    order_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    order_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("orders.id"), nullable=True, index=True
+    )
     created_by: Mapped[int] = mapped_column(BigInteger, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     assigned_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
