@@ -16,6 +16,7 @@ class User(Base):
     last_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     is_blocked: Mapped[bool] = mapped_column(Boolean, default=False)
+    balance: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class Order(Base):
@@ -30,6 +31,7 @@ class Order(Base):
     price: Mapped[int] = mapped_column(Integer, nullable=False)
     plan_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     renew_vpn_account_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    wallet_debit: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String(50), default="pending")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
@@ -49,6 +51,25 @@ class Payment(Base):
     )
     receipt_file_id: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(String(50), default="pending")  # pending, approved, rejected
+    admin_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    reviewed_by: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+
+
+class WalletTopUp(Base):
+    """User wallet top-up request awaiting receipt review."""
+
+    __tablename__ = "wallet_topups"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.id"), nullable=False, index=True
+    )
+    requested_amount: Mapped[int] = mapped_column(Integer, nullable=False)
+    credited_amount: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    receipt_file_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(50), default="pending")
     admin_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)

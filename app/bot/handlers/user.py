@@ -22,7 +22,7 @@ from app.bot.constants import (
     MAIN_MENU_BUTTONS,
     ORDER_STATUS_LABELS,
 )
-from app.bot.states import CustomPlanStates, PaymentStates
+from app.bot.states import CustomPlanStates, PaymentStates, WalletPayStates
 from app.bot.keyboards.user import (
     main_menu_keyboard,
     plans_keyboard,
@@ -31,8 +31,15 @@ from app.bot.keyboards.user import (
     accounts_list_keyboard,
     renew_plans_keyboard,
     flow_nav_keyboard,
+    wallet_pay_keyboard,
 )
 from app.services.users import get_or_create_user
+from app.services.wallet import (
+    InsufficientBalanceError,
+    debit_balance,
+    get_balance,
+)
+from app.services.order_fulfillment import fulfill_paid_order
 
 router = Router()
 
@@ -99,6 +106,164 @@ def resolve_order_pricing(data: dict):
 
 async def get_or_create_user_from_message(session: AsyncSession, message: Message) -> User:
     return await get_or_create_user(session, message.from_user)
+
+
+async def prompt_wallet_payment(bot, user_id: int, order: Order, state: FSMContext) -> None:
+    """Ask the user whether to pay with wallet after order creation."""
+    async with AsyncSessionLocal() as session:
+        balance = await get_balance(session, user_id)
+
+    await bot.send_message(
+        chat_id=user_id,
+        text=get_text(
+            "wallet_pay_prompt",
+            order_id=order.id,
+            price=order.price,
+            balance=balance,
+        ),
+        reply_markup=wallet_pay_keyboard(),
+    )
+    await state.update_data(order_id=order.id)
+    await state.set_state(WalletPayStates.choosing)
+
+
+async def send_card_payment_instructions(
+    bot,
+    user_id: int,
+    order: Order,
+    state: FSMContext,
+    *,
+    wallet_amount: int = 0,
+) -> None:
+    difference = order.price - wallet_amount
+    if wallet_amount > 0:
+        text = get_text(
+            "order_created_partial",
+            order_id=order.id,
+            price=order.price,
+            wallet_amount=wallet_amount,
+            difference=difference,
+            card_number=settings.CARD_NUMBER,
+            card_holder=settings.CARD_HOLDER,
+        )
+    else:
+        text = get_text(
+            "order_created",
+            order_id=order.id,
+            price=order.price,
+            card_number=settings.CARD_NUMBER,
+            card_holder=settings.CARD_HOLDER,
+        )
+
+    await bot.send_message(
+        chat_id=user_id,
+        text=text,
+        reply_markup=flow_nav_keyboard(),
+    )
+    await state.update_data(order_id=order.id)
+    await state.set_state(PaymentStates.waiting_for_receipt)
+
+
+async def notify_admins_wallet_manual(bot, payment: Payment, order: Order) -> None:
+    """Notify admins that a wallet-paid order needs a manual subscription link."""
+    from app.bot.keyboards.admin import payment_review_keyboard
+
+    wallet_debit = int(order.wallet_debit or 0)
+    text = (
+        "💳 سفارش پرداخت‌شده با کیف پول — نیاز به لینک دستی\n\n"
+        f"👤 کاربر: {order.user_id}\n"
+        f"🔢 سفارش: #{order.id}\n"
+        f"📦 {order.days} روز | {order.traffic_gb} گیگابایت\n"
+        f"💰 مبلغ: {order.price:,} تومان\n"
+        f"💳 از کیف پول: {wallet_debit:,} تومان\n\n"
+        "روی تایید بزنید و لینک را ارسال کنید."
+    )
+    for admin_id in settings.ADMIN_IDS:
+        try:
+            await bot.send_message(
+                chat_id=admin_id,
+                text=text,
+                reply_markup=payment_review_keyboard(payment.id),
+            )
+        except Exception as exc:
+            from app.utils.logger import logger
+
+            logger.warning(
+                "Failed to notify admin %s about wallet order %s: %s",
+                admin_id,
+                order.id,
+                exc,
+            )
+
+
+async def fulfill_full_wallet_order(bot, session, payment: Payment, order: Order) -> None:
+    """Fulfill an order fully paid from wallet (no receipt)."""
+    from app.bot.handlers.admin import send_config_to_user, send_renewal_to_user
+    from app.config.plans_loader import get_plan as _get_plan
+    from app.utils.logger import logger
+
+    plan = _get_plan(order.plan_id) if order.plan_id else None
+    plan_name = plan["name"] if plan else None
+
+    fulfill = await fulfill_paid_order(session, payment, order, None, plan_name)
+
+    if fulfill.kind in ("renewal_auto", "renewal_db") and fulfill.vpn_account:
+        await send_renewal_to_user(bot, order.user_id, fulfill.vpn_account, order)
+        logger.info(
+            "Wallet-fulfilled renewal order %s kind=%s", order.id, fulfill.kind
+        )
+        return
+
+    if fulfill.kind in ("new_auto", "new_inventory") and fulfill.config_text:
+        await send_config_to_user(bot, order.user_id, fulfill.config_text)
+        logger.info("Wallet-fulfilled order %s kind=%s", order.id, fulfill.kind)
+        return
+
+    # needs_manual — leave payment pending for admin
+    await notify_admins_wallet_manual(bot, payment, order)
+    await bot.send_message(
+        chat_id=order.user_id,
+        text=(
+            "✅ پرداخت از کیف پول ثبت شد.\n"
+            "اکانت شما به‌زودی توسط ادمین ارسال می‌شود."
+        ),
+    )
+    logger.info("Wallet order %s awaiting manual config", order.id)
+
+
+async def refund_wallet_on_cancel(order_id: int | None, user_id: int) -> int | None:
+    """Refund wallet_debit if user abandons a partial-pay order. Returns new balance."""
+    if not order_id:
+        return None
+
+    from app.bot.handlers.admin import refund_order_wallet_debit
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(Order).where(Order.id == order_id))
+        order = result.scalar_one_or_none()
+        if not order or order.user_id != user_id:
+            return None
+        if order.status not in ("pending", "paid"):
+            return None
+        if int(order.wallet_debit or 0) <= 0:
+            return None
+        # Only refund if no pending/approved payment yet, or still waiting for card part
+        existing = await session.execute(
+            select(Payment).where(
+                Payment.order_id == order_id,
+                Payment.status.in_(("pending", "approved")),
+            )
+        )
+        if existing.scalar_one_or_none():
+            return None
+
+        new_balance = await refund_order_wallet_debit(session, order)
+        if order.status == "pending":
+            order.status = "rejected"
+            # keep as abandoned; or leave pending — plan says refund on cancel
+        await session.commit()
+        return new_balance
+
 
 
 @router.message(CommandStart())
@@ -294,23 +459,10 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext):
             await session.commit()
             await session.refresh(order)
 
-        # Send payment instructions
         await callback.message.delete()
-        await callback.bot.send_message(
-            chat_id=callback.from_user.id,
-            text=get_text(
-                "order_created",
-                order_id=order.id,
-                price=order.price,
-                card_number=settings.CARD_NUMBER,
-                card_holder=settings.CARD_HOLDER,
-            ),
-            reply_markup=flow_nav_keyboard(),
+        await prompt_wallet_payment(
+            callback.bot, callback.from_user.id, order, state
         )
-
-        # Set state to wait for receipt
-        await state.update_data(order_id=order.id)
-        await state.set_state(PaymentStates.waiting_for_receipt)
 
         logger.info(f"Order {order.id} created by user {callback.from_user.id}")
     
@@ -330,6 +482,171 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext):
         return
     
     await callback.answer()
+
+
+@router.callback_query(WalletPayStates.choosing, F.data == "wallet_pay:no")
+async def wallet_pay_no(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    order_id = data.get("order_id")
+    if not order_id:
+        await callback.answer(get_text("error_general"), show_alert=True)
+        await state.clear()
+        return
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(Order).where(Order.id == order_id))
+        order = result.scalar_one_or_none()
+        if not order or order.user_id != callback.from_user.id:
+            await callback.answer(get_text("error_general"), show_alert=True)
+            await state.clear()
+            return
+        if order.status != "pending":
+            await callback.answer("این سفارش قابل پرداخت نیست.", show_alert=True)
+            await state.clear()
+            return
+
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+
+    await send_card_payment_instructions(
+        callback.bot, callback.from_user.id, order, state, wallet_amount=0
+    )
+    await callback.answer()
+
+
+@router.callback_query(WalletPayStates.choosing, F.data == "wallet_pay:yes")
+async def wallet_pay_yes(callback: CallbackQuery, state: FSMContext):
+    from app.utils.logger import logger
+
+    data = await state.get_data()
+    order_id = data.get("order_id")
+    if not order_id:
+        await callback.answer(get_text("error_general"), show_alert=True)
+        await state.clear()
+        return
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(Order).where(Order.id == order_id))
+        order = result.scalar_one_or_none()
+        if not order or order.user_id != callback.from_user.id:
+            await callback.answer(get_text("error_general"), show_alert=True)
+            await state.clear()
+            return
+        if order.status != "pending":
+            await callback.answer("این سفارش قابل پرداخت نیست.", show_alert=True)
+            await state.clear()
+            return
+
+        balance = await get_balance(session, callback.from_user.id)
+
+        if balance <= 0:
+            try:
+                await callback.message.delete()
+            except Exception:
+                pass
+            await callback.bot.send_message(
+                chat_id=callback.from_user.id,
+                text=get_text("wallet_empty"),
+            )
+            await send_card_payment_instructions(
+                callback.bot, callback.from_user.id, order, state, wallet_amount=0
+            )
+            await callback.answer()
+            return
+
+        debit_amount = min(balance, order.price)
+        try:
+            new_balance = await debit_balance(
+                session, callback.from_user.id, debit_amount
+            )
+        except InsufficientBalanceError:
+            await callback.answer(
+                "موجودی کیف پول کافی نیست. دوباره تلاش کنید.",
+                show_alert=True,
+            )
+            return
+
+        order.wallet_debit = debit_amount
+
+        if debit_amount >= order.price:
+            # Full wallet cover
+            order.status = "paid"
+            payment = Payment(
+                order_id=order.id,
+                user_id=order.user_id,
+                receipt_file_id="wallet",
+                status="pending",
+            )
+            session.add(payment)
+            await session.commit()
+            await session.refresh(payment)
+            await session.refresh(order)
+
+            try:
+                await callback.message.delete()
+            except Exception:
+                pass
+
+            await callback.bot.send_message(
+                chat_id=callback.from_user.id,
+                text=get_text(
+                    "wallet_pay_full",
+                    price=order.price,
+                    balance=new_balance,
+                ),
+                reply_markup=user_main_menu(callback.from_user.id),
+            )
+
+            try:
+                await fulfill_full_wallet_order(
+                    callback.bot, session, payment, order
+                )
+            except Exception as exc:
+                logger.error(
+                    "Failed to fulfill wallet order %s: %s", order.id, exc
+                )
+                await callback.bot.send_message(
+                    chat_id=callback.from_user.id,
+                    text=(
+                        "پرداخت ثبت شد اما فعال‌سازی خودکار ناموفق بود. "
+                        "ادمین به‌زودی اکانت را ارسال می‌کند."
+                    ),
+                )
+                await notify_admins_wallet_manual(callback.bot, payment, order)
+
+            await state.clear()
+            await callback.answer()
+            return
+
+        # Partial — difference by card
+        await session.commit()
+        await session.refresh(order)
+
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+
+    await send_card_payment_instructions(
+        callback.bot,
+        callback.from_user.id,
+        order,
+        state,
+        wallet_amount=debit_amount,
+    )
+    await callback.answer()
+
+
+
+@router.message(WalletPayStates.choosing, F.text.in_(MAIN_MENU_BUTTONS))
+async def wallet_pay_menu_interrupt(message: Message, state: FSMContext):
+    from app.bot.menu_dispatch import dispatch_main_menu
+
+    data = await state.get_data()
+    await refund_wallet_on_cancel(data.get("order_id"), message.from_user.id)
+    await dispatch_main_menu(message, state)
 
 
 @router.callback_query(F.data == "back:main")
@@ -389,10 +706,17 @@ async def cancel_order(callback: CallbackQuery, state: FSMContext):
 async def payment_back(message: Message, state: FSMContext):
     data = await state.get_data()
     order_id = data.get("order_id")
+    new_balance = await refund_wallet_on_cancel(order_id, message.from_user.id)
     await state.clear()
     note = ""
-    if order_id:
-        note = f"\n\n🔢 سفارش #{order_id} همچنان ثبت است. برای پرداخت دوباره «خرید پلن» را بزنید."
+    if new_balance is not None:
+        note = f"\n\n🔢 سفارش #{order_id} لغو شد."
+        note += "\n" + get_text("wallet_refund_on_reject", balance=new_balance)
+    elif order_id:
+        note = (
+            f"\n\n🔢 سفارش #{order_id} همچنان ثبت است. "
+            "برای پرداخت دوباره «خرید پلن» را بزنید."
+        )
     await message.answer(
         get_text("start") + note,
         reply_markup=user_main_menu(message.from_user.id),
@@ -478,7 +802,16 @@ async def receive_receipt(message: Message, state: FSMContext):
         )
         
         from app.bot.keyboards.admin import payment_review_keyboard
-        
+
+        wallet_debit = int(order.wallet_debit or 0)
+        wallet_note = ""
+        if wallet_debit > 0:
+            difference = order.price - wallet_debit
+            wallet_note = (
+                f"\n💳 از کیف پول: {wallet_debit:,} تومان"
+                f"\n💵 مبلغ رسید (باید واریز شده باشد): {difference:,} تومان"
+            )
+
         admin_text = get_text(
             "admin_new_payment",
             user_id=message.from_user.id,
@@ -487,6 +820,7 @@ async def receive_receipt(message: Message, state: FSMContext):
             days=order.days,
             traffic=order.traffic_gb,
             price=order.price,
+            wallet_note=wallet_note,
             renewal_note=(
                 f"\n🔄 تمدید اکانت #{order.renew_vpn_account_id}"
                 if order.renew_vpn_account_id
@@ -771,19 +1105,7 @@ async def confirm_renew_order(callback: CallbackQuery, state: FSMContext):
         await session.refresh(order)
 
     await callback.message.delete()
-    await callback.bot.send_message(
-        chat_id=callback.from_user.id,
-        text=get_text(
-            "order_created",
-            order_id=order.id,
-            price=order.price,
-            card_number=settings.CARD_NUMBER,
-            card_holder=settings.CARD_HOLDER,
-        ),
-        reply_markup=flow_nav_keyboard(),
-    )
-    await state.update_data(order_id=order.id)
-    await state.set_state(PaymentStates.waiting_for_receipt)
+    await prompt_wallet_payment(callback.bot, callback.from_user.id, order, state)
     logger.info(
         "Renewal order %s created for account %s by user %s",
         order.id,

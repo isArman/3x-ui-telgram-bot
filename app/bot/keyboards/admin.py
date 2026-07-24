@@ -25,6 +25,29 @@ def payment_review_keyboard(payment_id: int) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def topup_review_keyboard(topup_id: int, requested_amount: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text=f"✅ تایید مبلغ درخواستی ({requested_amount:,})",
+            callback_data=f"approve_topup:{topup_id}",
+        ),
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text="✏️ ثبت مبلغ دستی",
+            callback_data=f"manual_topup:{topup_id}",
+        ),
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text="❌ رد",
+            callback_data=f"reject_topup:{topup_id}",
+        ),
+    )
+    return builder.as_markup()
+
+
 def admin_menu_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="🔗 پنل 3x-ui", callback_data="admin:panel"))

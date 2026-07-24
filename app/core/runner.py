@@ -4,7 +4,7 @@ import logging
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 
-from app.bot.handlers import admin, panel_admin, user
+from app.bot.handlers import admin, panel_admin, user, wallet
 from app.bot.middleware import BlockedUserMiddleware
 from app.config.settings import settings
 from app.database.session import init_db
@@ -36,6 +36,7 @@ async def main():
 
     dp.include_router(panel_admin.router)
     dp.include_router(admin.router)
+    dp.include_router(wallet.router)
     dp.include_router(user.router)
 
     await on_startup()

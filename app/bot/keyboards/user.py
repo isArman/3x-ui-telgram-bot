@@ -9,6 +9,8 @@ from app.bot.constants import (
     BTN_CUSTOM_PLAN,
     BTN_MY_ACCOUNTS,
     BTN_MY_ORDERS,
+    BTN_TOP_UP,
+    BTN_WALLET,
     CANCEL_BUTTON,
 )
 
@@ -24,9 +26,49 @@ def main_menu_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
         KeyboardButton(text=BTN_MY_ORDERS),
         KeyboardButton(text=BTN_MY_ACCOUNTS),
     )
+    builder.row(KeyboardButton(text=BTN_WALLET))
     if is_admin:
         builder.row(KeyboardButton(text=BTN_ADMIN_PANEL))
     return builder.as_markup(resize_keyboard=True)
+
+
+def wallet_keyboard() -> ReplyKeyboardMarkup:
+    """Wallet home reply keyboard."""
+    builder = ReplyKeyboardBuilder()
+    builder.row(KeyboardButton(text=BTN_TOP_UP))
+    builder.row(
+        KeyboardButton(text=BACK_BUTTON),
+        KeyboardButton(text=CANCEL_BUTTON),
+    )
+    return builder.as_markup(resize_keyboard=True)
+
+
+def confirm_topup_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="✅ تایید", callback_data="confirm_topup"),
+    )
+    builder.row(
+        InlineKeyboardButton(text=CANCEL_BUTTON, callback_data="cancel_topup"),
+    )
+    return builder.as_markup()
+
+
+def wallet_pay_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text="✅ بله، استفاده از کیف پول",
+            callback_data="wallet_pay:yes",
+        ),
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text="💳 خیر، فقط کارت",
+            callback_data="wallet_pay:no",
+        ),
+    )
+    return builder.as_markup()
 
 
 def flow_nav_keyboard() -> ReplyKeyboardMarkup:

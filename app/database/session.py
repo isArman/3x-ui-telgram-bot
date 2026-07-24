@@ -29,6 +29,13 @@ AsyncSessionLocal = async_sessionmaker(
 
 
 async def _migrate_sqlite_columns(conn):
+    result = await conn.execute(text("PRAGMA table_info(users)"))
+    user_cols = {row[1] for row in result.fetchall()}
+    if "balance" not in user_cols:
+        await conn.execute(
+            text("ALTER TABLE users ADD COLUMN balance INTEGER DEFAULT 0")
+        )
+
     result = await conn.execute(text("PRAGMA table_info(orders)"))
     order_cols = {row[1] for row in result.fetchall()}
     if "plan_id" not in order_cols:
@@ -36,6 +43,10 @@ async def _migrate_sqlite_columns(conn):
     if "renew_vpn_account_id" not in order_cols:
         await conn.execute(
             text("ALTER TABLE orders ADD COLUMN renew_vpn_account_id INTEGER")
+        )
+    if "wallet_debit" not in order_cols:
+        await conn.execute(
+            text("ALTER TABLE orders ADD COLUMN wallet_debit INTEGER DEFAULT 0")
         )
 
     result = await conn.execute(text("PRAGMA table_info(vpn_accounts)"))
@@ -84,6 +95,7 @@ async def _migrate_sqlite_indexes(conn):
         "CREATE INDEX IF NOT EXISTS ix_vpn_accounts_user_id ON vpn_accounts(user_id)",
         "CREATE INDEX IF NOT EXISTS ix_plan_configs_plan_id ON plan_configs(plan_id)",
         "CREATE INDEX IF NOT EXISTS ix_plan_configs_order_id ON plan_configs(order_id)",
+        "CREATE INDEX IF NOT EXISTS ix_wallet_topups_user_id ON wallet_topups(user_id)",
         # At most one pending payment per order
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_payments_pending_order "
         "ON payments(order_id) WHERE status = 'pending'",

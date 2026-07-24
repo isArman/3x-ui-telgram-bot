@@ -1,11 +1,11 @@
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from aiogram import F, Router
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
 
-from app.bot.auth import deny_non_admin_callback, is_admin
+from app.bot.auth import is_admin
 from app.bot.constants import (
     ADMIN_MENU_TEXT,
     BTN_ADMIN_PANEL,
@@ -19,23 +19,20 @@ from app.bot.keyboards.admin import (
     admin_cancel_keyboard,
     admin_menu_keyboard,
     configs_menu_keyboard,
-    payment_review_keyboard,
     plan_select_keyboard,
 )
 from app.bot.states import AdminStates
 from app.config.plans_loader import PLANS, get_plan
-from app.config.settings import settings
 from app.config.texts import get_text
-from app.database.models import Order, Payment, PlanConfig, User, VPNAccount
+from app.database.models import Order, Payment, PlanConfig, VPNAccount, WalletTopUp
 from app.database.session import AsyncSessionLocal
-from app.services.config_inventory import add_config, assign_config, count_available
-from app.services.panel_settings import (
-    PROVISIONING_AUTO,
-    get_panel_settings,
-    is_auto_provisioning_ready,
+from app.services.config_inventory import add_config, count_available
+from app.services.order_fulfillment import (
+    complete_payment_approval,
+    fulfill_paid_order,
 )
-from app.services.renewal import extend_vpn_account
-from app.services.xui_provisioning import provision_subscription_for_order
+from app.services.panel_settings import PROVISIONING_AUTO, get_panel_settings
+from app.services.wallet import credit_balance
 from app.utils.logger import logger
 from app.utils.validation import is_valid_config_text
 
@@ -48,51 +45,6 @@ async def show_configs_menu(message: Message) -> None:
 
 async def show_admin_menu(message: Message) -> None:
     await message.answer(ADMIN_MENU_TEXT, reply_markup=admin_menu_keyboard())
-
-
-async def complete_payment_approval(
-    session,
-    payment: Payment,
-    order: Order,
-    admin_id: int,
-    config_text: str,
-    plan_config_id: int | None = None,
-    config_ref: str | None = None,
-) -> None:
-    payment.status = "approved"
-    payment.reviewed_at = datetime.utcnow()
-    payment.reviewed_by = admin_id
-    order.status = "completed"
-
-    vpn_account = VPNAccount(
-        order_id=order.id,
-        user_id=order.user_id,
-        config_ref=config_ref or (str(plan_config_id) if plan_config_id else "manual"),
-        subscription_path=config_text,
-        expires_at=datetime.utcnow() + timedelta(days=order.days),
-        traffic_limit_gb=order.traffic_gb,
-        is_active=True,
-    )
-    session.add(vpn_account)
-    await session.commit()
-
-
-async def complete_renewal_approval(
-    session,
-    payment: Payment,
-    order: Order,
-    admin_id: int,
-    vpn_account: VPNAccount,
-    subscription_url: str | None = None,
-) -> VPNAccount:
-    payment.status = "approved"
-    payment.reviewed_at = datetime.utcnow()
-    payment.reviewed_by = admin_id
-    order.status = "completed"
-    await extend_vpn_account(session, vpn_account, order, subscription_url)
-    await session.commit()
-    await session.refresh(vpn_account)
-    return vpn_account
 
 
 async def send_renewal_to_user(bot, user_id: int, vpn_account: VPNAccount, order: Order) -> None:
@@ -175,28 +127,15 @@ async def _finalize_renewal_delivery(
     await callback.answer("تمدید انجام شد!")
 
 
-async def _try_auto_provision(
-    session,
-    order: Order,
-    user: User,
-    vpn_account: VPNAccount | None = None,
-) -> str | None:
-    panel = await get_panel_settings(session)
-    if not is_auto_provisioning_ready(panel):
+async def refund_order_wallet_debit(session, order: Order) -> int | None:
+    """Refund wallet_debit to user if any. Returns new balance or None."""
+    debit = int(order.wallet_debit or 0)
+    if debit <= 0:
         return None
+    new_balance = await credit_balance(session, order.user_id, debit)
+    order.wallet_debit = 0
+    return new_balance
 
-    return await provision_subscription_for_order(
-        session, panel, user, order, existing_account=vpn_account
-    )
-
-
-async def _try_inventory_fallback(
-    session,
-    order: Order,
-) -> PlanConfig | None:
-    if not order.plan_id:
-        return None
-    return await assign_config(session, order.plan_id, order.id)
 
 
 # --- Config inventory admin ---
@@ -204,6 +143,10 @@ async def _try_inventory_fallback(
 
 @router.message(
     StateFilter(AdminStates.waiting_for_config_text),
+    F.text.in_(MAIN_MENU_BUTTONS),
+)
+@router.message(
+    StateFilter(AdminStates.waiting_for_topup_amount),
     F.text.in_(MAIN_MENU_BUTTONS),
 )
 async def admin_fsm_menu_interrupt(message: Message, state: FSMContext):
@@ -402,93 +345,54 @@ async def approve_payment(callback: CallbackQuery, state: FSMContext):
         plan = get_plan(order.plan_id) if order.plan_id else None
         plan_name = plan["name"] if plan else None
 
-        user_result = await session.execute(select(User).where(User.id == order.user_id))
-        user = user_result.scalar_one_or_none()
-        if not user:
-            await callback.answer("کاربر یافت نشد!", show_alert=True)
+        try:
+            fulfill = await fulfill_paid_order(
+                session, payment, order, callback.from_user.id, plan_name
+            )
+        except ValueError as exc:
+            await callback.answer(str(exc), show_alert=True)
             return
 
-        # --- Renewal order ---
-        if order.renew_vpn_account_id:
-            acc_result = await session.execute(
-                select(VPNAccount).where(VPNAccount.id == order.renew_vpn_account_id)
+        if fulfill.kind == "renewal_auto":
+            logger.info(
+                "Auto-renewed account %s for order %s", fulfill.vpn_account.id, order.id
             )
-            vpn_account = acc_result.scalar_one_or_none()
-            if not vpn_account or vpn_account.user_id != order.user_id:
-                await callback.answer("اکانت تمدید یافت نشد!", show_alert=True)
-                return
-
-            sub_url = await _try_auto_provision(session, order, user, vpn_account)
-            if sub_url:
-                vpn_account = await complete_renewal_approval(
-                    session,
-                    payment,
-                    order,
-                    callback.from_user.id,
-                    vpn_account,
-                    sub_url,
-                )
-                logger.info(
-                    "Auto-renewed account %s for order %s", vpn_account.id, order.id
-                )
-                await _finalize_renewal_delivery(
-                    callback, order, payment, vpn_account, "خودکار 3x-ui", plan_name
-                )
-                return
-
-            await complete_renewal_approval(
-                session,
-                payment,
-                order,
-                callback.from_user.id,
-                vpn_account,
-                None,
-            )
-            logger.info("Renewed account %s (DB only) for order %s", vpn_account.id, order.id)
             await _finalize_renewal_delivery(
-                callback, order, payment, vpn_account, "تمدید دستی", plan_name
+                callback, order, payment, fulfill.vpn_account, "خودکار 3x-ui", plan_name
             )
             return
 
-        # 1) Auto provisioning via 3x-ui (if enabled)
-        sub_url = await _try_auto_provision(session, order, user)
-        if sub_url:
-            await complete_payment_approval(
-                session,
-                payment,
-                order,
-                callback.from_user.id,
-                sub_url,
-                config_ref="xui-auto",
+        if fulfill.kind == "renewal_db":
+            logger.info(
+                "Renewed account %s (DB only) for order %s",
+                fulfill.vpn_account.id,
+                order.id,
             )
+            await _finalize_renewal_delivery(
+                callback, order, payment, fulfill.vpn_account, "تمدید دستی", plan_name
+            )
+            return
+
+        if fulfill.kind == "new_auto":
             logger.info("Auto-provisioned order %s for user %s", order.id, order.user_id)
             await _finalize_config_delivery(
-                callback, order, payment, sub_url, "خودکار 3x-ui", plan_name
+                callback, order, payment, fulfill.config_text, "خودکار 3x-ui", plan_name
             )
             return
 
-        # 2) Fallback: manual inventory (pre-stocked configs)
-        config_entry = await _try_inventory_fallback(session, order)
-        if config_entry:
-            await complete_payment_approval(
-                session,
-                payment,
-                order,
-                callback.from_user.id,
-                config_entry.config_text,
-                config_entry.id,
-            )
-            logger.info(f"Assigned config {config_entry.id} to order {order.id}")
+        if fulfill.kind == "new_inventory":
+            logger.info("Assigned config %s to order %s", fulfill.plan_config_id, order.id)
             await _finalize_config_delivery(
                 callback,
                 order,
                 payment,
-                config_entry.config_text,
+                fulfill.config_text,
                 "انبار دستی",
                 plan_name,
             )
             return
 
+        # needs_manual
         if order.plan_id and plan_name:
             await callback.message.answer(
                 f"⚠️ ساخت خودکار ناموفق و موجودی پلن «{plan_name}» خالی است.\n"
@@ -608,6 +512,7 @@ async def reject_payment(callback: CallbackQuery):
         payment.reviewed_by = callback.from_user.id
         payment.admin_note = "رد شده توسط ادمین"
         order.status = "rejected"
+        new_balance = await refund_order_wallet_debit(session, order)
         await session.commit()
 
         try:
@@ -615,6 +520,11 @@ async def reject_payment(callback: CallbackQuery):
                 chat_id=order.user_id,
                 text=get_text("payment_rejected", reason="رسید پرداخت معتبر نیست"),
             )
+            if new_balance is not None:
+                await callback.bot.send_message(
+                    chat_id=order.user_id,
+                    text=get_text("wallet_refund_on_reject", balance=new_balance),
+                )
         except Exception as exc:
             logger.error(f"Failed to notify user: {exc}")
 
@@ -626,6 +536,222 @@ async def reject_payment(callback: CallbackQuery):
             pass
 
         await callback.answer("پرداخت رد شد!", show_alert=True)
+
+
+# --- Wallet top-up review ---
+
+
+async def _credit_topup(
+    session,
+    topup: WalletTopUp,
+    credited_amount: int,
+    admin_id: int,
+) -> int:
+    topup.credited_amount = credited_amount
+    topup.status = "approved"
+    topup.reviewed_at = datetime.utcnow()
+    topup.reviewed_by = admin_id
+    return await credit_balance(session, topup.user_id, credited_amount)
+
+
+@router.callback_query(F.data.startswith("approve_topup:"))
+async def approve_topup(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("شما دسترسی ندارید!", show_alert=True)
+        return
+
+    topup_id = int(callback.data.split(":")[1])
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(WalletTopUp).where(WalletTopUp.id == topup_id)
+        )
+        topup = result.scalar_one_or_none()
+
+        if not topup or topup.status != "pending":
+            await callback.answer("درخواست یافت نشد یا قبلاً بررسی شده!", show_alert=True)
+            return
+
+        if not topup.receipt_file_id:
+            await callback.answer("هنوز رسیدی دریافت نشده است!", show_alert=True)
+            return
+
+        amount = topup.requested_amount
+        balance = await _credit_topup(session, topup, amount, callback.from_user.id)
+        await session.commit()
+
+        try:
+            await callback.bot.send_message(
+                chat_id=topup.user_id,
+                text=get_text("wallet_topup_approved", amount=amount, balance=balance),
+            )
+        except Exception as exc:
+            logger.error("Failed to notify user about topup %s: %s", topup_id, exc)
+
+        try:
+            await callback.message.edit_caption(
+                caption=(callback.message.caption or "")
+                + f"\n\n✅ تایید مبلغ درخواستی ({amount:,})"
+            )
+        except Exception:
+            pass
+
+        await callback.message.answer(
+            get_text("admin_topup_credited_requested", amount=amount)
+        )
+        await callback.answer("شارژ تایید شد!")
+
+
+@router.callback_query(F.data.startswith("manual_topup:"))
+async def manual_topup_start(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("شما دسترسی ندارید!", show_alert=True)
+        return
+
+    topup_id = int(callback.data.split(":")[1])
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(WalletTopUp).where(WalletTopUp.id == topup_id)
+        )
+        topup = result.scalar_one_or_none()
+
+        if not topup or topup.status != "pending":
+            await callback.answer("درخواست یافت نشد یا قبلاً بررسی شده!", show_alert=True)
+            return
+
+    await state.update_data(manual_topup_id=topup_id)
+    await state.set_state(AdminStates.waiting_for_topup_amount)
+    await callback.message.answer(
+        get_text(
+            "admin_topup_ask_manual",
+            requested_amount=topup.requested_amount,
+        ),
+        reply_markup=admin_cancel_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.waiting_for_topup_amount)
+async def manual_topup_amount(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+
+    if message.text == "❌ لغو":
+        await state.clear()
+        await message.answer(
+            "ثبت مبلغ دستی لغو شد.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        await show_admin_menu(message)
+        return
+
+    if await dispatch_main_menu(message, state):
+        return
+
+    try:
+        amount = int(message.text.replace(",", "").replace("،", "").strip())
+        if amount < 1:
+            await message.answer(get_text("error_invalid_number"))
+            return
+    except (TypeError, ValueError):
+        await message.answer(get_text("error_invalid_number"))
+        return
+
+    data = await state.get_data()
+    topup_id = data.get("manual_topup_id")
+    if not topup_id:
+        await message.answer(get_text("error_general"))
+        await state.clear()
+        return
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(WalletTopUp).where(WalletTopUp.id == topup_id)
+        )
+        topup = result.scalar_one_or_none()
+
+        if not topup or topup.status != "pending":
+            await message.answer("درخواست یافت نشد یا قبلاً بررسی شده!")
+            await state.clear()
+            return
+
+        requested = topup.requested_amount
+        balance = await _credit_topup(session, topup, amount, message.from_user.id)
+        await session.commit()
+
+        try:
+            if amount == requested:
+                user_text = get_text(
+                    "wallet_topup_approved", amount=amount, balance=balance
+                )
+            else:
+                user_text = get_text(
+                    "wallet_topup_approved_manual",
+                    requested_amount=requested,
+                    credited_amount=amount,
+                    balance=balance,
+                )
+            await message.bot.send_message(chat_id=topup.user_id, text=user_text)
+        except Exception as exc:
+            logger.error("Failed to notify user about topup %s: %s", topup_id, exc)
+
+        await message.answer(
+            get_text(
+                "admin_topup_credited",
+                credited_amount=amount,
+                requested_amount=requested,
+            ),
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        await show_admin_menu(message)
+
+    await state.clear()
+
+
+@router.callback_query(F.data.startswith("reject_topup:"))
+async def reject_topup(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("شما دسترسی ندارید!", show_alert=True)
+        return
+
+    topup_id = int(callback.data.split(":")[1])
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(WalletTopUp).where(WalletTopUp.id == topup_id)
+        )
+        topup = result.scalar_one_or_none()
+
+        if not topup or topup.status != "pending":
+            await callback.answer("درخواست یافت نشد!", show_alert=True)
+            return
+
+        topup.status = "rejected"
+        topup.reviewed_at = datetime.utcnow()
+        topup.reviewed_by = callback.from_user.id
+        topup.admin_note = "رد شده توسط ادمین"
+        await session.commit()
+
+        try:
+            await callback.bot.send_message(
+                chat_id=topup.user_id,
+                text=get_text(
+                    "wallet_topup_rejected",
+                    reason="رسید پرداخت معتبر نیست",
+                ),
+            )
+        except Exception as exc:
+            logger.error("Failed to notify user about topup reject %s: %s", topup_id, exc)
+
+        try:
+            await callback.message.edit_caption(
+                caption=(callback.message.caption or "") + "\n\n❌ رد شد"
+            )
+        except Exception:
+            pass
+
+        await callback.answer("درخواست شارژ رد شد!", show_alert=True)
 
 
 async def _send_dashboard(bot, chat_id: int) -> None:
@@ -663,7 +789,15 @@ async def _send_pending_payments(bot, chat_id: int) -> None:
         )
         payments = result.scalars().all()
 
-        if not payments:
+        topup_result = await session.execute(
+            select(WalletTopUp)
+            .where(WalletTopUp.status == "pending")
+            .order_by(WalletTopUp.created_at.desc())
+            .limit(10)
+        )
+        topups = topup_result.scalars().all()
+
+        if not payments and not topups:
             await bot.send_message(chat_id=chat_id, text="هیچ پرداخت در انتظاری وجود ندارد.")
             return
 
@@ -675,10 +809,29 @@ async def _send_pending_payments(bot, chat_id: int) -> None:
             order = order_result.scalar_one_or_none()
             if order:
                 plan_label = order.plan_id or "سفارشی"
+                wallet_debit = int(order.wallet_debit or 0)
+                amount_due = order.price - wallet_debit
+                wallet_line = ""
+                if wallet_debit > 0:
+                    wallet_line = (
+                        f"💳 کیف پول: {wallet_debit:,} | "
+                        f"💵 رسید: {amount_due:,}\n"
+                    )
                 text += (
-                    f"🆔 #{payment.id} | 👤 {payment.user_id}\n"
+                    f"🆔 پرداخت #{payment.id} | 👤 {payment.user_id}\n"
                     f"📦 {plan_label} | {order.days}روز {order.traffic_gb}GB\n"
-                    f"💰 {order.price:,} تومان\n{'─' * 25}\n"
+                    f"💰 کل: {order.price:,} تومان\n"
+                    f"{wallet_line}"
+                    f"{'─' * 25}\n"
+                )
+
+        if topups:
+            text += "\n💳 شارژ کیف پول در انتظار:\n\n"
+            for topup in topups:
+                text += (
+                    f"🆔 شارژ #{topup.id} | 👤 {topup.user_id}\n"
+                    f"💰 درخواستی: {topup.requested_amount:,} تومان\n"
+                    f"{'─' * 25}\n"
                 )
 
         await bot.send_message(chat_id=chat_id, text=text)
