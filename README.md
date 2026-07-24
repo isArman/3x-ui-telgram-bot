@@ -3,22 +3,24 @@
 [![Tests](https://github.com/isArman/3x-ui-telgram-bot/actions/workflows/test.yml/badge.svg)](https://github.com/isArman/3x-ui-telgram-bot/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-> **English:** Telegram bot to sell VPN subscriptions. Supports manual config inventory **or** automatic provisioning via [3x-ui](https://github.com/MHSanaei/3x-ui) panel. Users pay by bank transfer, upload receipt; admin approves; bot delivers subscription link.
+> **English:** Telegram bot to sell VPN subscriptions. Card-to-card payments with receipt review, wallet balance, referrals, and admin-managed plans/card details in-bot. Supports manual config inventory **or** automatic provisioning via [3x-ui](https://github.com/MHSanaei/3x-ui).
 
 ---
 
 ## قابلیت‌ها
 
 - فروش پلن‌های آماده و پلن سفارشی (روز + حجم)
-- پرداخت کارت‌به‌کارت + آپلود رسید
-- تأیید/رد پرداخت توسط ادمین
+- پرداخت کارت‌به‌کارت + آپلود رسید + تأیید/رد ادمین
+- **کیف پول:** شارژ با مبلغ دلخواه، پرداخت کامل یا جزئی از موجودی
+- **معرفی دوستان:** لینک دعوت، ۱۵٪ تخفیف اولین خرید معرف‌شده، ۲۰٪ پاداش کیف پول برای معرف
+- مدیریت **پلن‌ها** و **کارت بانکی** از داخل پنل ادمین ربات (ذخیره در دیتابیس)
 - **دو حالت ارسال کانفیگ:**
-  1. **خودکار (3x-ui)** — ساخت/آپدیت کلاینت در پنل + ارسال لینک subscription
+  1. **خودکار (3x-ui)** — ساخت/آپدیت کلاینت در پنل + لینک subscription
   2. **انبار دستی** — کانفیگ‌های از پیش ذخیره‌شده per-plan
-- fallback: اگر auto یا انبار ناموفق بود → ادمین لینک را دستی می‌فرستد
-- نوتیفیکیشن انقضای اکانت (هر ۶ ساعت)
+- fallback: auto/انبار ناموفق → ادمین لینک را دستی می‌فرستد
+- تمدید اکانت از داخل ربات
+- نوتیفیکیشن انقضا و کم‌شدن ترافیک
 - داشبورد ادمین + موجودی کانفیگ
-- دکمه بازگشت در تمام مراحل خرید
 
 ---
 
@@ -30,7 +32,7 @@
 | Python 3.11+ | بدون Docker |
 | اکانت تلگرام + BotFather token | بله |
 | پنل 3x-ui | فقط برای حالت خودکار |
-| شماره کارت بانکی | بله |
+| شماره کارت بانکی | بله (از داخل ربات تنظیم می‌شود) |
 
 ---
 
@@ -41,10 +43,11 @@ git clone https://github.com/isArman/3x-ui-telgram-bot.git
 cd 3x-ui-telgram-bot
 
 cp .env.example .env
+# اختیاری — فقط برای seed اولیه پلن‌ها در اولین اجرا:
 cp app/config/plans.example.yaml app/config/plans.yaml
 mkdir -p data
 
-# ویرایش .env — حداقل BOT_TOKEN, ADMIN_IDS, CARD_NUMBER, CARD_HOLDER
+# ویرایش .env — حداقل BOT_TOKEN و ADMIN_IDS
 nano .env
 
 # تولید SECRET_KEY (برای رمزنگاری پسورد پنل در دیتابیس)
@@ -56,14 +59,18 @@ docker compose logs -f bot
 
 در لاگ باید ببینید: `Bot started with N admin(s) configured`
 
+بعد از استارت، در ربات:
+
+1. **⚙️ پنل ادمین** → **💳 کارت بانکی** — شماره و نام صاحب کارت
+2. **⚙️ پنل ادمین** → **📦 مدیریت پلن‌ها** — پلن‌ها و قیمت پلن سفارشی  
+   (اگر `plans.yaml` وجود داشته باشد، در اولین اجرا به‌صورت خودکار وارد دیتابیس می‌شود)
+
 ---
 
 ## به‌روزرسانی ربات روی سرور
 
-روی سروری که ربات با Docker اجرا می‌شود (مثلاً مسیر `/root/3x-ui-telgram-bot`):
-
 ```bash
-cd /root/3x-ui-telgram-bot
+cd /root/3x-ui-telgram-bot   # مسیر پروژه روی سرور
 
 # بکاپ سریع (اختیاری)
 cp -a .env /tmp/bot.env.bak
@@ -77,8 +84,7 @@ docker compose up -d --build
 docker compose logs --tail=50 bot
 ```
 
-پلن‌ها و شماره کارت از داخل ربات (پنل ادمین → مدیریت پلن‌ها / کارت بانکی) مدیریت می‌شوند و در دیتابیس ذخیره می‌گردند.  
-`BOT_TOKEN` و `ADMIN_IDS` همچنان فقط در `.env` هستند.
+`.env` و پوشه `data/` را commit نکنید؛ بعد از update سر جایشان می‌مانند.
 
 ---
 
@@ -86,69 +92,84 @@ docker compose logs --tail=50 bot
 
 ```env
 BOT_TOKEN=7123456789:AAHxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-ADMIN_IDS=123456789
-CARD_NUMBER=6037-1234-5678-9012
-CARD_HOLDER=نام صاحب کارت
+ADMIN_IDS=123456789,987654321
 DATABASE_URL=sqlite+aiosqlite:///data/db.sqlite3
 SECRET_KEY=your-fernet-key-here
 XUI_VERIFY_SSL=true
 LOG_LEVEL=INFO
+
+# اختیاری — فقط برای seed اولیه کارت در دیتابیس
+# CARD_NUMBER=6037-1234-5678-9012
+# CARD_HOLDER=نام صاحب کارت
 ```
 
 | متغیر | توضیح |
 |--------|--------|
-| `BOT_TOKEN` | توکن BotFather |
-| `ADMIN_IDS` | آیدی عددی ادمین(ها)، با ویرگول |
-| `CARD_NUMBER` / `CARD_HOLDER` | اطلاعات پرداخت |
+| `BOT_TOKEN` | توکن BotFather — **الزامی** |
+| `ADMIN_IDS` | آیدی عددی ادمین(ها)، با ویرگول — **الزامی** |
+| `DATABASE_URL` | مسیر SQLite (پیش‌فرض برای Docker کافی است) |
 | `SECRET_KEY` | رمزنگاری پسورد پنل در SQLite — **در production الزامی** |
-| `XUI_VERIFY_SSL` | `false` فقط برای پنل با گواهی self-signed در dev |
+| `XUI_VERIFY_SSL` | `false` فقط برای پنل self-signed در dev |
 | `LOG_LEVEL` | سطح لاگ |
+| `CARD_NUMBER` / `CARD_HOLDER` | اختیاری؛ ترجیحاً از داخل ربات تنظیم کنید |
 
 > **نکته:** قبل از نام متغیر فاصله نگذارید. ` ADMIN_IDS=123` توسط Docker نادیده گرفته می‌شود.
 
 ---
 
-## تنظیم پلن‌ها (`plans.yaml`)
+## مدیریت پلن‌ها و کارت (داخل ربات)
 
-```bash
-cp app/config/plans.example.yaml app/config/plans.yaml
-nano app/config/plans.yaml
-```
+پلن‌ها و کارت دیگر نیازی به ویرایش فایل روی سرور ندارند.
 
-```yaml
-plans:
-  - id: basic
-    name: "پلن پایه"
-    days: 15
-    traffic: 10
-    price: 100000
-    description: "15 روزه — 10 گیگابایت"
-
-pricing:
-  per_day: 4000
-  per_gb: 9000
-```
+| منو | کار |
+|-----|-----|
+| **📦 مدیریت پلن‌ها** | افزودن / ویرایش / فعال‌غیرفعال پلن آماده |
+| **💰 قیمت پلن سفارشی** | تنظیم `per_day` و `per_gb` |
+| **💳 کارت بانکی** | شماره کارت و نام صاحب کارت |
 
 فرمول پلن سفارشی: `(روز × per_day) + (گیگ × per_gb)`
 
-بعد از تغییر قیمت: `docker compose restart`
+`plans.yaml` / `plans.example.yaml` فقط برای **seed اولیه** استفاده می‌شوند؛ بعد از آن منبع حقیقت دیتابیس است.
+
+---
+
+## کیف پول
+
+- منو: **💰 کیف پول من** → شارژ با مبلغ دلخواه → کارت → رسید → تأیید ادمین
+- هنگام خرید/تمدید ربات می‌پرسد از کیف پول استفاده شود یا نه:
+  - موجودی کافی → کسر و فعال‌سازی (بدون رسید)
+  - موجودی کمتر → کسر موجودی + پرداخت مابه‌تفاوت با کارت/رسید
+  - رد پرداخت جزئی → مبلغ کیف پول برمی‌گردد
+
+ادمین برای شارژ می‌تواند مبلغ درخواستی را تأیید کند یا مبلغ دستی وارد کند.
+
+---
+
+## سیستم معرفی (Referral)
+
+- هر کاربر کد و لینک دعوت دارد: **🎁 دعوت دوستان**  
+  `https://t.me/<BOT>?start=<code>`
+- فقط کاربر **جدید** که با لینک وارد شود به معرف وصل می‌شود (یک‌بار، غیرقابل تغییر)
+- روی **اولین خرید اشتراک جدید** (نه تمدید):
+  - معرف‌شده: **۱۵٪ تخفیف**
+  - معرف: **۲۰٪ مبلغ اصلی پلن** به‌صورت اعتبار کیف پول (غیرقابل برداشت جداگانه — همان موجودی کیف پول)
 
 ---
 
 ## راه‌اندازی پنل 3x-ui (حالت خودکار)
 
-1. در ربات: **⚙️ پنل ادمین** → **🔗 پنل 3x-ui**
+1. **⚙️ پنل ادمین** → **🔗 پنل 3x-ui**
 2. **⚙️ تنظیم اتصال پنل** — URL، username، password
-3. ربات اتصال را تست می‌کند و آدرس subscription را از تنظیمات پنل می‌خواند
+3. ربات اتصال را تست می‌کند و آدرس subscription را از پنل می‌خواند
 4. **📡 بروزرسانی Inboundها** — inboundهای مورد نظر را انتخاب کنید
 5. **حالت ارسال** را روی **🤖 خودکار** بگذارید
 
 ### رفتار auto-provision
 
 - Email کلاینت = Telegram user ID
-- Comment = فقط اطلاعات پروفایل تلگرام (id, username, name)
-- خرید مجدد = **آپدیت** همان کلاینت (نه ساخت جدید)
-- خطا → fallback به انبار دستی → fallback به ارسال دستی
+- Comment = پروفایل تلگرام (id, username, name)
+- خرید مجدد = **آپدیت** همان کلاینت
+- خطا → fallback به انبار دستی → ارسال دستی
 
 ---
 
@@ -163,28 +184,32 @@ pricing:
 
 ## فلوی خرید کاربر
 
-```
-/start → خرید پلن → انتخاب → تایید → واریز → ارسال رسید
-                                              ↓
-                                    ادمین تأیید/رد
-                                              ↓
-                              auto 3x-ui / انبار / دستی
-                                              ↓
-                                   لینک subscription
+```text
+/start [کد معرف]
+  → خرید پلن / پلن سفارشی
+  → تایید (با تخفیف معرف در صورت واجد شرایط بودن)
+  → استفاده از کیف پول؟ (بله کامل / بله جزئی / خیر)
+  → در صورت نیاز: واریز کارت + ارسال رسید
+  → ادمین تأیید/رد
+  → auto 3x-ui / انبار / دستی
+  → لینک subscription (+ پاداش کیف پول به معرف در صورت اولین خرید)
 ```
 
 ---
 
-## دستورات ادمین
+## دستورات و منوی ادمین
 
 | دستور / منو | کار |
 |-------------|-----|
-| `/admin` | پنل ادمین |
-| `/configs` | مدیریت انبار کانفیگ |
-| `/dashboard` | آمار |
-| `/pending` | پرداخت‌های در انتظار |
-| `/payments` | تاریخچه |
-| **🔗 پنل 3x-ui** | اتصال پنل، inbound، auto/manual |
+| `/admin` یا **⚙️ پنل ادمین** | منوی اصلی ادمین |
+| **📦 مدیریت پلن‌ها** | پلن‌های آماده + قیمت سفارشی |
+| **💳 کارت بانکی** | شماره و نام صاحب کارت |
+| **🔗 پنل 3x-ui** | اتصال، inbound، auto/manual |
+| **🗂 مدیریت کانفیگ‌ها** | انبار کانفیگ |
+| **📊 داشبورد** / `/dashboard` | آمار |
+| **📋 پرداخت‌های در انتظار** / `/pending` | سفارش و شارژ کیف پول |
+| `/payments` | تاریخچه پرداخت‌ها |
+| `/configs` | میانبر انبار کانفیگ |
 
 ---
 
@@ -196,18 +221,16 @@ pricing:
 |-------------|--------|
 | `.env` | توکن ربات، SECRET_KEY، ADMIN_IDS |
 | `data/` | دیتابیس SQLite، لاگ‌ها |
-| `app/config/plans.yaml` | قیمت‌ها و پلن‌های شما |
+| `app/config/plans.yaml` | اختیاری؛ فقط seed اولیه |
 
-همه در `.gitignore` هستند. قبل از public کردن repo، تاریخچه git را برای leak بررسی کنید.
+همه در `.gitignore` هستند.
 
 ### متغیرهای امنیتی
 
 ```env
-SECRET_KEY=...          # رمزنگاری پسورد پنل 3x-ui در دیتابیس (الزامی در production)
-XUI_VERIFY_SSL=true     # false فقط برای پنل self-signed در محیط dev
+SECRET_KEY=...          # رمزنگاری پسورد پنل 3x-ui در دیتابیس
+XUI_VERIFY_SSL=true     # false فقط برای پنل self-signed در dev
 ```
-
-تولید `SECRET_KEY`:
 
 ```bash
 python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
@@ -219,29 +242,26 @@ python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().
 |------|-----|--------|
 | توکن ربات | `.env` | با `/revoke` در BotFather قابل rotate |
 | پسورد پنل 3x-ui | SQLite | رمزنگاری‌شده با Fernet |
-| رسید پرداخت | Telegram + DB | `receipt_file_id` — مرجع فایل تلگرام |
-| لینک subscription | SQLite | برای تحویل سرویس به کاربر |
-| پروفایل تلگرام | SQLite | id، username، نام |
+| کارت و پلن‌ها | SQLite | قابل ویرایش از پنل ادمین |
+| موجودی کیف پول / معرف | SQLite | روی جدول کاربران و سفارش‌ها |
+| رسید پرداخت | Telegram + DB | `receipt_file_id` |
+| لینک subscription | SQLite | تحویل سرویس |
 
 ### حریم خصوصی کاربران
 
-- فیلد **comment** در پنل 3x-ui فقط شامل id، username و نام تلگرام است (بدون جزئیات سفارش)
+- فیلد **comment** در 3x-ui فقط شامل id، username و نام است
 - لاگ‌ها توکن و پسورد را ذخیره نمی‌کنند
-- پیام پسورد پنل بعد از setup از چت admin حذف می‌شود
+- پیام پسورد پنل بعد از setup از چت ادمین حذف می‌شود
 
 ### توصیه‌های عملیاتی
 
 1. فقط آیدی‌های مورد اعتماد در `ADMIN_IDS`
-2. توکن لو رفته → فوراً `/revoke` در BotFather
-3. پسورد پنل لو رفته → در 3x-ui عوض کنید و اتصال را دوباره setup کنید
-4. از HTTPS برای پنل 3x-ui استفاده کنید (`XUI_VERIFY_SSL=true`)
-5. پوشه `data/` را backup بگیرید — ولی backup را public نکنید
+2. توکن لو رفته → `/revoke` در BotFather
+3. پسورد پنل لو رفته → در 3x-ui عوض کنید و دوباره setup کنید
+4. از HTTPS برای پنل استفاده کنید
+5. از `data/` بکاپ بگیرید — بکاپ را public نکنید
 
-### گزارش آسیب‌پذیری
-
-لطفاً issue عمومی باز نکنید. جزئیات را به maintainer به‌صورت خصوصی بفرستید.
-
-→ راهنمای کامل: [SECURITY.md](SECURITY.md)
+→ [SECURITY.md](SECURITY.md)
 
 ---
 
@@ -250,7 +270,6 @@ python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().
 ```bash
 docker run --rm \
   -e BOT_TOKEN=test:123 -e ADMIN_IDS=1 \
-  -e CARD_NUMBER=1234 -e CARD_HOLDER=Test \
   -e SECRET_KEY=test-key \
   -v "$(pwd):/app" \
   3x-ui-telgram-bot-bot \
@@ -263,12 +282,12 @@ docker run --rm \
 
 ```text
 app/
-  bot/handlers/     # user, admin, panel_admin
+  bot/handlers/     # user, wallet, admin, shop_admin, panel_admin
   bot/keyboards/    # Reply & inline keyboards
   bot/auth.py       # Admin authorization
-  config/           # settings, plans, texts
-  database/         # SQLAlchemy models
-  services/         # provisioning, inventory, users
+  config/           # settings, texts, optional YAML seed
+  database/         # SQLAlchemy models + SQLite migrations
+  services/         # wallet, referral, plans, provisioning, …
   xui/              # 3x-ui API client
   utils/            # encryption, validation, scheduler
 data/               # SQLite + logs (gitignored)
@@ -283,10 +302,12 @@ tests/
 |------|--------|
 | ربات جواب نمی‌دهد | `docker compose logs -f bot` |
 | دکمه ادمین نیست | `ADMIN_IDS` را چک کنید + rebuild |
-| auto-provision fail | پنل را تست کنید؛ inbound انتخاب شده؟ subscription فعال؟ |
+| «کارت تنظیم نشده» | پنل ادمین → **کارت بانکی** |
+| لیست پلن خالی است | پنل ادمین → **مدیریت پلن‌ها** یا seed از `plans.yaml` در اولین boot |
+| auto-provision fail | تست اتصال پنل؛ inbound انتخاب شده؟ subscription فعال؟ |
 | TLS error به پنل | `XUI_VERIFY_SSL=false` (فقط dev) |
-| قیمت قدیمی | `docker compose restart` |
-| Missing settings | `.env` را کامل کنید |
+| قیمت عوض نمی‌شود | قیمت را از **مدیریت پلن‌ها** در ربات تغییر دهید (نه فایل YAML) |
+| Missing settings | `.env` حداقل `BOT_TOKEN` و `ADMIN_IDS` |
 
 ---
 
