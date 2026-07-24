@@ -22,7 +22,7 @@ from app.bot.keyboards.admin import (
     plan_select_keyboard,
 )
 from app.bot.states import AdminStates
-from app.config.plans_loader import PLANS, get_plan
+from app.config.settings import settings
 from app.config.texts import get_text
 from app.database.models import Order, Payment, PlanConfig, VPNAccount, WalletTopUp
 from app.database.session import AsyncSessionLocal
@@ -33,6 +33,7 @@ from app.services.order_fulfillment import (
 )
 from app.services.panel_settings import PROVISIONING_AUTO, get_panel_settings
 from app.services.wallet import credit_balance
+from app.services.plans_catalog import get_plan, list_active_plans, list_all_plans
 from app.utils.logger import logger
 from app.utils.validation import is_valid_config_text
 
@@ -230,20 +231,22 @@ async def configs_stock(callback: CallbackQuery):
         return
 
     async with AsyncSessionLocal() as session:
+        plans = await list_all_plans(session)
         lines = ["📦 موجودی کانفیگ هر پلن:\n"]
-        for plan in PLANS:
-            available = await count_available(session, plan["id"])
+        for plan in plans:
+            available = await count_available(session, plan.id)
             total_result = await session.execute(
                 select(func.count())
                 .select_from(PlanConfig)
-                .where(PlanConfig.plan_id == plan["id"])
+                .where(PlanConfig.plan_id == plan.id)
             )
             total = total_result.scalar_one()
+            status = "" if plan.is_active else " [غیرفعال]"
             lines.append(
-                f"• {plan['name']} ({plan['id']}): {available} آزاد / {total} کل"
+                f"• {plan.name} ({plan.id}){status}: {available} آزاد / {total} کل"
             )
 
-    await callback.message.answer("\n".join(lines))
+    await callback.message.answer("\n".join(lines) if len(lines) > 1 else "پلنی نیست.")
     await callback.answer()
 
 
@@ -253,9 +256,15 @@ async def configs_add_start(callback: CallbackQuery):
         await callback.answer("دسترسی ندارید!", show_alert=True)
         return
 
+    async with AsyncSessionLocal() as session:
+        plans = await list_active_plans(session)
+    if not plans:
+        await callback.message.answer("ابتدا از «مدیریت پلن‌ها» یک پلن فعال بسازید.")
+        await callback.answer()
+        return
     await callback.message.answer(
         "پلن مورد نظر را انتخاب کنید:",
-        reply_markup=plan_select_keyboard(PLANS, "configs:add_plan"),
+        reply_markup=plan_select_keyboard(plans, "configs:add_plan"),
     )
     await callback.answer()
 
@@ -267,7 +276,8 @@ async def configs_add_plan(callback: CallbackQuery, state: FSMContext):
         return
 
     plan_id = callback.data.split(":")[2]
-    plan = get_plan(plan_id)
+    async with AsyncSessionLocal() as session:
+        plan = await get_plan(session, plan_id)
     if not plan:
         await callback.answer("پلن یافت نشد!", show_alert=True)
         return
@@ -299,13 +309,13 @@ async def configs_receive_text(message: Message, state: FSMContext):
 
     data = await state.get_data()
     plan_id = data.get("config_plan_id")
-    plan = get_plan(plan_id)
-    if not plan:
-        await message.answer("❌ پلن یافت نشد.")
-        await state.clear()
-        return
-
     async with AsyncSessionLocal() as session:
+        plan = await get_plan(session, plan_id)
+        if not plan:
+            await message.answer("❌ پلن یافت نشد.")
+            await state.clear()
+            return
+
         entry = await add_config(session, plan_id, config_text, message.from_user.id)
         available = await count_available(session, plan_id)
 
@@ -342,7 +352,7 @@ async def approve_payment(callback: CallbackQuery, state: FSMContext):
             await callback.answer("سفارش یافت نشد!", show_alert=True)
             return
 
-        plan = get_plan(order.plan_id) if order.plan_id else None
+        plan = await get_plan(session, order.plan_id) if order.plan_id else None
         plan_name = plan["name"] if plan else None
 
         try:
@@ -768,10 +778,13 @@ async def _send_dashboard(bot, chat_id: int) -> None:
 
     async with AsyncSessionLocal() as session:
         stats = await get_dashboard_stats(session)
+        plans = await list_active_plans(session)
         stock_lines = []
-        for plan in PLANS:
+        for plan in plans:
             n = await count_available(session, plan["id"])
             stock_lines.append(f"  • {plan['name']}: {n} آزاد")
+        if not stock_lines:
+            stock_lines = ["  • —"]
 
         await bot.send_message(
             chat_id=chat_id,

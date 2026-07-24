@@ -1,19 +1,21 @@
-import yaml
+"""Optional YAML seed for first-time DB bootstrap (plans no longer required at runtime)."""
+
 from pathlib import Path
+from typing import Any
+
+import yaml
 
 _dir = Path(__file__).parent
 _plans_path = _dir / "plans.yaml"
 _example_path = _dir / "plans.example.yaml"
 
-_path = _plans_path if _plans_path.exists() else _example_path
-with open(_path, "r", encoding="utf-8") as _f:
-    _data = yaml.safe_load(_f)
 
-PLANS = _data["plans"]
-PRICING = _data["pricing"]
-
-PLAN_BY_ID = {p["id"]: p for p in PLANS}
-
-
-def get_plan(plan_id: str):
-    return PLAN_BY_ID.get(plan_id)
+def load_yaml_seed() -> dict[str, Any] | None:
+    path = _plans_path if _plans_path.exists() else _example_path
+    if not path.exists():
+        return None
+    with open(path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    if not isinstance(data, dict):
+        return None
+    return data

@@ -65,29 +65,20 @@ docker compose logs -f bot
 ```bash
 cd /root/3x-ui-telgram-bot
 
-# اگر git به خاطر ownership خطا داد:
-# git -c safe.directory=/root/3x-ui-telgram-bot status
-
-# بکاپ سریع فایل‌های محلی (اختیاری ولی توصیه‌شده)
+# بکاپ سریع (اختیاری)
 cp -a .env /tmp/bot.env.bak
-cp -a app/config/plans.yaml /tmp/plans.yaml.bak
 cp -a data /tmp/bot-data.bak
 
-# گرفتن آخرین کد
 git fetch origin
 git reset --hard origin/main
-# فقط فایل‌های untracked مزاحم را پاک می‌کند؛ .env و data و plans.yaml (gitignore) حفظ می‌شوند
 git clean -fd
 
-# بیلد و ری‌استارت
 docker compose up -d --build
 docker compose logs --tail=50 bot
 ```
 
-اگر فقط `git pull` به‌خاطر تغییرات محلی روی سرور fail شد، همان `reset --hard origin/main` لازم است.  
-`.env`، `data/` و `app/config/plans.yaml` را commit نکنید؛ بعد از update باید سر جایشان بمانند.
-
-اسکریپت آماده: `scripts/deploy.sh` (در صورت کثیف بودن working tree ممکن است `git pull` داخل آن fail شود — در آن حالت از دستورات بالا استفاده کنید).
+پلن‌ها و شماره کارت از داخل ربات (پنل ادمین → مدیریت پلن‌ها / کارت بانکی) مدیریت می‌شوند و در دیتابیس ذخیره می‌گردند.  
+`BOT_TOKEN` و `ADMIN_IDS` همچنان فقط در `.env` هستند.
 
 ---
 

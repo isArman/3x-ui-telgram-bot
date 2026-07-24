@@ -43,10 +43,12 @@ class Settings:
 
     @property
     def CARD_NUMBER(self) -> str:
+        """Optional legacy seed for BotSettings; prefer DB card settings."""
         return get_env("CARD_NUMBER")
 
     @property
     def CARD_HOLDER(self) -> str:
+        """Optional legacy seed for BotSettings; prefer DB card settings."""
         return get_env("CARD_HOLDER")
 
     @property
@@ -71,8 +73,6 @@ class Settings:
         required = {
             "BOT_TOKEN": self.BOT_TOKEN,
             "ADMIN_IDS": self.ADMIN_IDS,
-            "CARD_NUMBER": self.CARD_NUMBER,
-            "CARD_HOLDER": self.CARD_HOLDER,
         }
         missing = [key for key, value in required.items() if not value]
         if missing:

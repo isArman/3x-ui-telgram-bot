@@ -51,9 +51,104 @@ def topup_review_keyboard(topup_id: int, requested_amount: int) -> InlineKeyboar
 def admin_menu_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="🔗 پنل 3x-ui", callback_data="admin:panel"))
+    builder.row(InlineKeyboardButton(text="📦 مدیریت پلن‌ها", callback_data="admin:plans"))
+    builder.row(InlineKeyboardButton(text="💳 کارت بانکی", callback_data="admin:card"))
     builder.row(InlineKeyboardButton(text="🗂 مدیریت کانفیگ‌ها", callback_data="admin:configs"))
     builder.row(InlineKeyboardButton(text="📊 داشبورد", callback_data="admin:dashboard"))
     builder.row(InlineKeyboardButton(text="📋 پرداخت‌های در انتظار", callback_data="admin:pending"))
+    return builder.as_markup()
+
+
+def card_settings_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="✏️ شماره کارت", callback_data="admin:card:number")
+    )
+    builder.row(
+        InlineKeyboardButton(text="✏️ نام صاحب کارت", callback_data="admin:card:holder")
+    )
+    builder.row(InlineKeyboardButton(text="🔙 بازگشت", callback_data="admin:menu"))
+    return builder.as_markup()
+
+
+def plans_admin_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="📋 لیست پلن‌ها", callback_data="admin:plans:list")
+    )
+    builder.row(
+        InlineKeyboardButton(text="➕ افزودن پلن", callback_data="admin:plans:add")
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text="💰 قیمت پلن سفارشی", callback_data="admin:plans:pricing"
+        )
+    )
+    builder.row(InlineKeyboardButton(text="🔙 بازگشت", callback_data="admin:menu"))
+    return builder.as_markup()
+
+
+def plan_admin_list_keyboard(plans) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for plan in plans:
+        mark = "✅" if plan.is_active else "⏸"
+        builder.row(
+            InlineKeyboardButton(
+                text=f"{mark} {plan.name} ({plan.price:,})",
+                callback_data=f"admin:plans:view:{plan.id}",
+            )
+        )
+    builder.row(InlineKeyboardButton(text="🔙 بازگشت", callback_data="admin:plans"))
+    return builder.as_markup()
+
+
+def plan_admin_detail_keyboard(plan_id: str, is_active: bool) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text="✏️ نام", callback_data=f"admin:plans:edit:{plan_id}:name"
+        ),
+        InlineKeyboardButton(
+            text="✏️ روز", callback_data=f"admin:plans:edit:{plan_id}:days"
+        ),
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text="✏️ حجم", callback_data=f"admin:plans:edit:{plan_id}:traffic"
+        ),
+        InlineKeyboardButton(
+            text="✏️ قیمت", callback_data=f"admin:plans:edit:{plan_id}:price"
+        ),
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text="✏️ توضیحات",
+            callback_data=f"admin:plans:edit:{plan_id}:description",
+        )
+    )
+    toggle_label = "⏸ غیرفعال کردن" if is_active else "✅ فعال کردن"
+    builder.row(
+        InlineKeyboardButton(
+            text=toggle_label, callback_data=f"admin:plans:toggle:{plan_id}"
+        )
+    )
+    builder.row(InlineKeyboardButton(text="🔙 بازگشت", callback_data="admin:plans:list"))
+    return builder.as_markup()
+
+
+def pricing_admin_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text="✏️ قیمت هر روز", callback_data="admin:plans:pricing:day"
+        )
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text="✏️ قیمت هر گیگ", callback_data="admin:plans:pricing:gb"
+        )
+    )
+    builder.row(InlineKeyboardButton(text="🔙 بازگشت", callback_data="admin:plans"))
     return builder.as_markup()
 
 

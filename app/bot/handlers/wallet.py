@@ -22,18 +22,20 @@ from app.bot.keyboards.user import (
 )
 from app.bot.menu_dispatch import dispatch_main_menu
 from app.bot.states import TopUpStates, WalletStates
-from app.config.settings import settings
 from app.config.texts import get_text
 from app.database.models import WalletTopUp
 from app.database.session import AsyncSessionLocal
 from app.services.users import get_or_create_user
 from app.services.wallet import get_balance
+from app.services.bot_settings import get_card_details
 from app.utils.logger import logger
 
 router = Router()
 
 
 def user_main_menu(user_id: int):
+    from app.config.settings import settings
+
     return main_menu_keyboard(is_admin=user_id in settings.ADMIN_IDS)
 
 
@@ -159,6 +161,21 @@ async def confirm_topup(callback: CallbackQuery, state: FSMContext):
         session.add(topup)
         await session.commit()
         await session.refresh(topup)
+        card_number, card_holder = await get_card_details(session)
+
+    if not card_number or not card_holder:
+        await callback.message.delete()
+        await callback.bot.send_message(
+            chat_id=callback.from_user.id,
+            text=(
+                "❌ اطلاعات کارت بانکی هنوز توسط ادمین تنظیم نشده است.\n"
+                "لطفاً بعداً دوباره تلاش کنید."
+            ),
+            reply_markup=user_main_menu(callback.from_user.id),
+        )
+        await state.clear()
+        await callback.answer()
+        return
 
     await callback.message.delete()
     await callback.bot.send_message(
@@ -167,8 +184,8 @@ async def confirm_topup(callback: CallbackQuery, state: FSMContext):
             "wallet_topup_created",
             topup_id=topup.id,
             amount=amount,
-            card_number=settings.CARD_NUMBER,
-            card_holder=settings.CARD_HOLDER,
+            card_number=card_number,
+            card_holder=card_holder,
         ),
         reply_markup=flow_nav_keyboard(),
     )

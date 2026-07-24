@@ -165,10 +165,24 @@ async def _migrate_sqlite_indexes(conn):
 
 
 async def init_db():
-    """Initialize database tables"""
+    """Initialize database tables and seed shop settings if empty."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         if settings.DATABASE_URL.startswith("sqlite"):
             await _migrate_sqlite_columns(conn)
             await _migrate_sqlite_indexes(conn)
             await _backfill_referral_codes(conn)
+
+    # Seed card + plans outside the DDL transaction
+    from app.services.bot_settings import get_bot_settings
+    from app.services.plans_catalog import bootstrap_plans_from_yaml
+
+    async with AsyncSessionLocal() as session:
+        await get_bot_settings(session)
+        inserted = await bootstrap_plans_from_yaml(session)
+        if inserted:
+            import logging
+
+            logging.getLogger(__name__).info(
+                "Bootstrapped %s shop plan(s) from YAML", inserted
+            )

@@ -142,3 +142,48 @@ class PanelSettings(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )
+
+
+class BotSettings(Base):
+    """Singleton (id=1) — payment card details editable in the bot."""
+
+    __tablename__ = "bot_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    card_number: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    card_holder: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+
+class ShopPlan(Base):
+    """Sellable ready-made plan (replaces plans.yaml entries)."""
+
+    __tablename__ = "shop_plans"
+
+    id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    days: Mapped[int] = mapped_column(Integer, nullable=False)
+    traffic_gb: Mapped[int] = mapped_column(Integer, nullable=False)
+    price: Mapped[int] = mapped_column(Integer, nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+
+class PricingSettings(Base):
+    """Singleton (id=1) — custom-plan pricing formula."""
+
+    __tablename__ = "pricing_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    per_day: Mapped[int] = mapped_column(Integer, default=4000)
+    per_gb: Mapped[int] = mapped_column(Integer, default=9000)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )

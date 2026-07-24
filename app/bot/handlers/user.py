@@ -7,7 +7,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.texts import get_text
 from app.config.settings import settings
-from app.config.plans_loader import PLANS, PRICING, get_plan
 from app.database.models import User, Order, Payment, VPNAccount
 from app.database.session import AsyncSessionLocal
 from app.bot.constants import (
@@ -48,6 +47,8 @@ from app.services.referral import (
     referral_link,
     try_bind_referrer,
 )
+from app.services.bot_settings import get_card_details
+from app.services.plans_catalog import get_plan, get_pricing, list_active_plans
 
 router = Router()
 
@@ -79,22 +80,27 @@ async def notify_referral_cashback(bot, cashback: tuple[int, int] | None) -> Non
             "Failed to notify referrer %s about cashback: %s", referrer_id, exc
         )
 
+
 def user_main_menu(user_id: int):
     return main_menu_keyboard(is_admin=user_id in settings.ADMIN_IDS)
 
 
-def build_plans_text() -> str:
+def build_plans_text(plans: list) -> str:
     text = get_text("plans_list")
-    for plan in PLANS:
+    if not plans:
+        return text + "هنوز پلن آماده‌ای تعریف نشده است.\n"
+    for plan in plans:
         text += get_text("plan_details", **plan) + "\n"
     return text
 
 
 async def send_plans_menu(bot, chat_id: int) -> None:
+    async with AsyncSessionLocal() as session:
+        plans = await list_active_plans(session)
     await bot.send_message(
         chat_id=chat_id,
-        text=build_plans_text(),
-        reply_markup=plans_keyboard(PLANS),
+        text=build_plans_text(plans),
+        reply_markup=plans_keyboard(plans),
     )
 
 
@@ -106,23 +112,23 @@ async def send_main_menu_message(message: Message, state: FSMContext) -> None:
     )
 
 
-def calculate_custom_price(days: int, traffic_gb: int) -> int:
+def calculate_custom_price(days: int, traffic_gb: int, pricing: dict) -> int:
     """Calculate price for custom plan"""
-    return (days * PRICING["per_day"]) + (traffic_gb * PRICING["per_gb"])
+    return (days * pricing["per_day"]) + (traffic_gb * pricing["per_gb"])
 
 
-def resolve_order_pricing(data: dict):
+async def resolve_order_pricing(session: AsyncSession, data: dict):
     """
-    Resolve authoritative plan pricing on the server.
+    Resolve authoritative plan pricing from DB.
 
-    Ready-made plans: days/traffic/price come from plans.yaml via plan_id.
+    Ready-made plans: days/traffic/price come from shop_plans via plan_id.
     Custom plans: recompute price from days/traffic + pricing formula.
 
     Returns (plan_id, days, traffic_gb, price) or None if invalid.
     """
     plan_id = data.get("plan_id")
     if plan_id:
-        plan = get_plan(plan_id)
+        plan = await get_plan(session, plan_id, active_only=True)
         if not plan:
             return None
         return plan_id, int(plan["days"]), int(plan["traffic"]), int(plan["price"])
@@ -136,7 +142,8 @@ def resolve_order_pricing(data: dict):
     if not 1 <= days <= 365 or not 1 <= traffic <= 500:
         return None
 
-    return None, days, traffic, calculate_custom_price(days, traffic)
+    pricing = await get_pricing(session)
+    return None, days, traffic, calculate_custom_price(days, traffic, pricing)
 
 
 async def get_or_create_user_from_message(
@@ -180,6 +187,21 @@ async def send_card_payment_instructions(
     *,
     wallet_amount: int = 0,
 ) -> None:
+    async with AsyncSessionLocal() as session:
+        card_number, card_holder = await get_card_details(session)
+
+    if not card_number or not card_holder:
+        await bot.send_message(
+            chat_id=user_id,
+            text=(
+                "❌ اطلاعات کارت بانکی هنوز توسط ادمین تنظیم نشده است.\n"
+                "لطفاً بعداً دوباره تلاش کنید."
+            ),
+            reply_markup=user_main_menu(user_id),
+        )
+        await state.clear()
+        return
+
     difference = order.price - wallet_amount
     if wallet_amount > 0:
         text = get_text(
@@ -188,16 +210,16 @@ async def send_card_payment_instructions(
             price=order.price,
             wallet_amount=wallet_amount,
             difference=difference,
-            card_number=settings.CARD_NUMBER,
-            card_holder=settings.CARD_HOLDER,
+            card_number=card_number,
+            card_holder=card_holder,
         )
     else:
         text = get_text(
             "order_created",
             order_id=order.id,
             price=order.price,
-            card_number=settings.CARD_NUMBER,
-            card_holder=settings.CARD_HOLDER,
+            card_number=card_number,
+            card_holder=card_holder,
         )
 
     await bot.send_message(
@@ -244,10 +266,11 @@ async def notify_admins_wallet_manual(bot, payment: Payment, order: Order) -> No
 async def fulfill_full_wallet_order(bot, session, payment: Payment, order: Order) -> None:
     """Fulfill an order fully paid from wallet (no receipt)."""
     from app.bot.handlers.admin import send_config_to_user, send_renewal_to_user
-    from app.config.plans_loader import get_plan as _get_plan
     from app.utils.logger import logger
 
-    plan = _get_plan(order.plan_id) if order.plan_id else None
+    plan = None
+    if order.plan_id:
+        plan = await get_plan(session, order.plan_id)
     plan_name = plan["name"] if plan else None
 
     fulfill = await fulfill_paid_order(session, payment, order, None, plan_name)
@@ -366,9 +389,11 @@ async def show_referral(message: Message, state: FSMContext):
 async def show_plans(message: Message, state: FSMContext):
     """Show available plans"""
     await state.clear()
+    async with AsyncSessionLocal() as session:
+        plans = await list_active_plans(session)
     await message.answer(
-        build_plans_text(),
-        reply_markup=plans_keyboard(PLANS),
+        build_plans_text(plans),
+        reply_markup=plans_keyboard(plans),
     )
 
 
@@ -376,8 +401,9 @@ async def show_plans(message: Message, state: FSMContext):
 async def select_plan(callback: CallbackQuery, state: FSMContext):
     """Handle plan selection"""
     plan_id = callback.data.split(":")[1]
-    plan = get_plan(plan_id)
-    
+    async with AsyncSessionLocal() as session:
+        plan = await get_plan(session, plan_id, active_only=True)
+
     if not plan:
         await callback.answer("پلن یافت نشد!", show_alert=True)
         return
@@ -389,7 +415,7 @@ async def select_plan(callback: CallbackQuery, state: FSMContext):
         traffic=plan["traffic"],
         price=plan["price"],
     )
-    
+
     await callback.message.edit_text(
         get_text("custom_plan_confirm", **plan),
         reply_markup=confirm_order_keyboard("back:plans"),
@@ -463,7 +489,9 @@ async def custom_plan_traffic(message: Message, state: FSMContext):
 
         data = await state.get_data()
         days = data["days"]
-        price = calculate_custom_price(days, traffic)
+        async with AsyncSessionLocal() as session:
+            pricing = await get_pricing(session)
+        price = calculate_custom_price(days, traffic, pricing)
 
         await state.update_data(traffic=traffic, price=price, plan_id=None)
 
@@ -512,7 +540,8 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext):
         return
     
     data = await state.get_data()
-    resolved = resolve_order_pricing(data)
+    async with AsyncSessionLocal() as session:
+        resolved = await resolve_order_pricing(session, data)
 
     if not resolved:
         await callback.answer(
@@ -1089,10 +1118,12 @@ async def renew_account_start(callback: CallbackQuery, state: FSMContext):
 
     await state.clear()
     await state.update_data(renew_vpn_account_id=vpn_account_id)
+    async with AsyncSessionLocal() as session:
+        plans = await list_active_plans(session)
     await callback.message.edit_text(
         f"🔄 تمدید اکانت سفارش #{account.order_id}\n\n"
         "یک پلن برای تمدید انتخاب کنید:",
-        reply_markup=renew_plans_keyboard(PLANS, vpn_account_id),
+        reply_markup=renew_plans_keyboard(plans, vpn_account_id),
     )
     await callback.answer()
 
@@ -1102,7 +1133,8 @@ async def renew_select_plan(callback: CallbackQuery, state: FSMContext):
     parts = callback.data.split(":")
     vpn_account_id = int(parts[1])
     plan_id = parts[2]
-    plan = get_plan(plan_id)
+    async with AsyncSessionLocal() as session:
+        plan = await get_plan(session, plan_id, active_only=True)
 
     if not plan:
         await callback.answer("پلن یافت نشد!", show_alert=True)
@@ -1160,7 +1192,8 @@ async def confirm_renew_order(callback: CallbackQuery, state: FSMContext):
 
     data = await state.get_data()
     renew_vpn_account_id = data.get("renew_vpn_account_id")
-    resolved = resolve_order_pricing(data)
+    async with AsyncSessionLocal() as session:
+        resolved = await resolve_order_pricing(session, data)
 
     if not renew_vpn_account_id or not resolved:
         await callback.answer("اطلاعات تمدید نامعتبر است.", show_alert=True)
