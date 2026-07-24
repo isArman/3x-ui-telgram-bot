@@ -7,9 +7,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import User
+from app.services.referral import ensure_referral_code
 
 
-async def get_or_create_user(session: AsyncSession, tg_user: TelegramUser) -> User:
+async def get_or_create_user(
+    session: AsyncSession, tg_user: TelegramUser
+) -> tuple[User, bool]:
+    """
+    Get or create user. Returns (user, created).
+    Always ensures a referral_code exists.
+    """
     result = await session.execute(select(User).where(User.id == tg_user.id))
     user = result.scalar_one_or_none()
 
@@ -22,7 +29,8 @@ async def get_or_create_user(session: AsyncSession, tg_user: TelegramUser) -> Us
         )
         session.add(user)
         await session.flush()
-        return user
+        await ensure_referral_code(session, user)
+        return user, True
 
     changed = False
     for attr, value in (
@@ -34,10 +42,14 @@ async def get_or_create_user(session: AsyncSession, tg_user: TelegramUser) -> Us
             setattr(user, attr, value)
             changed = True
 
+    if not user.referral_code:
+        await ensure_referral_code(session, user)
+        changed = True
+
     if changed:
         await session.flush()
 
-    return user
+    return user, False
 
 
 async def is_user_blocked(session: AsyncSession, user_id: int) -> bool:

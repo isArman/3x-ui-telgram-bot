@@ -9,6 +9,7 @@ from app.bot.constants import (
     BTN_CUSTOM_PLAN,
     BTN_MY_ACCOUNTS,
     BTN_MY_ORDERS,
+    BTN_REFERRAL,
     BTN_TOP_UP,
     BTN_WALLET,
     CANCEL_BUTTON,
@@ -26,7 +27,10 @@ def main_menu_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
         KeyboardButton(text=BTN_MY_ORDERS),
         KeyboardButton(text=BTN_MY_ACCOUNTS),
     )
-    builder.row(KeyboardButton(text=BTN_WALLET))
+    builder.row(
+        KeyboardButton(text=BTN_WALLET),
+        KeyboardButton(text=BTN_REFERRAL),
+    )
     if is_admin:
         builder.row(KeyboardButton(text=BTN_ADMIN_PANEL))
     return builder.as_markup(resize_keyboard=True)

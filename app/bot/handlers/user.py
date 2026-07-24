@@ -17,6 +17,7 @@ from app.bot.constants import (
     BTN_CUSTOM_PLAN,
     BTN_MY_ACCOUNTS,
     BTN_MY_ORDERS,
+    BTN_REFERRAL,
     CANCEL_BUTTON,
     FLOW_NAV_BUTTONS,
     MAIN_MENU_BUTTONS,
@@ -40,9 +41,43 @@ from app.services.wallet import (
     get_balance,
 )
 from app.services.order_fulfillment import fulfill_paid_order
+from app.services.referral import (
+    apply_purchase_discount,
+    ensure_referral_code,
+    is_discount_eligible,
+    referral_link,
+    try_bind_referrer,
+)
 
 router = Router()
 
+_bot_username_cache: str | None = None
+
+
+async def get_bot_username(bot) -> str:
+    global _bot_username_cache
+    if _bot_username_cache:
+        return _bot_username_cache
+    me = await bot.get_me()
+    _bot_username_cache = me.username or ""
+    return _bot_username_cache
+
+
+async def notify_referral_cashback(bot, cashback: tuple[int, int] | None) -> None:
+    if not cashback:
+        return
+    referrer_id, amount = cashback
+    try:
+        await bot.send_message(
+            chat_id=referrer_id,
+            text=get_text("referral_cashback_notify", amount=amount),
+        )
+    except Exception as exc:
+        from app.utils.logger import logger
+
+        logger.warning(
+            "Failed to notify referrer %s about cashback: %s", referrer_id, exc
+        )
 
 def user_main_menu(user_id: int):
     return main_menu_keyboard(is_admin=user_id in settings.ADMIN_IDS)
@@ -104,7 +139,9 @@ def resolve_order_pricing(data: dict):
     return None, days, traffic, calculate_custom_price(days, traffic)
 
 
-async def get_or_create_user_from_message(session: AsyncSession, message: Message) -> User:
+async def get_or_create_user_from_message(
+    session: AsyncSession, message: Message
+) -> tuple[User, bool]:
     return await get_or_create_user(session, message.from_user)
 
 
@@ -113,6 +150,13 @@ async def prompt_wallet_payment(bot, user_id: int, order: Order, state: FSMConte
     async with AsyncSessionLocal() as session:
         balance = await get_balance(session, user_id)
 
+    discount_note = ""
+    if order.referral_discount_applied and order.original_price:
+        discount_note = get_text(
+            "referral_discount_note",
+            original_price=order.original_price,
+        )
+
     await bot.send_message(
         chat_id=user_id,
         text=get_text(
@@ -120,6 +164,7 @@ async def prompt_wallet_payment(bot, user_id: int, order: Order, state: FSMConte
             order_id=order.id,
             price=order.price,
             balance=balance,
+            discount_note=discount_note,
         ),
         reply_markup=wallet_pay_keyboard(),
     )
@@ -206,6 +251,7 @@ async def fulfill_full_wallet_order(bot, session, payment: Payment, order: Order
     plan_name = plan["name"] if plan else None
 
     fulfill = await fulfill_paid_order(session, payment, order, None, plan_name)
+    await notify_referral_cashback(bot, fulfill.referral_cashback)
 
     if fulfill.kind in ("renewal_auto", "renewal_db") and fulfill.vpn_account:
         await send_renewal_to_user(bot, order.user_id, fulfill.vpn_account, order)
@@ -268,14 +314,50 @@ async def refund_wallet_on_cancel(order_id: int | None, user_id: int) -> int | N
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
-    """Start command handler"""
+    """Start command handler — supports /start <referral_code>."""
     await state.clear()
 
+    payload = None
+    if message.text:
+        parts = message.text.split(maxsplit=1)
+        if len(parts) > 1:
+            payload = parts[1].strip() or None
+
     async with AsyncSessionLocal() as session:
-        await get_or_create_user_from_message(session, message)
-    
+        user, created = await get_or_create_user_from_message(session, message)
+        if created and payload:
+            await try_bind_referrer(session, user, payload, is_new_user=True)
+        await session.commit()
+
     await message.answer(
         get_text("start"),
+        reply_markup=user_main_menu(message.from_user.id),
+    )
+
+
+@router.message(F.text == BTN_REFERRAL)
+async def show_referral(message: Message, state: FSMContext):
+    """Show user's referral code and invite link."""
+    await state.clear()
+    async with AsyncSessionLocal() as session:
+        user, _ = await get_or_create_user(session, message.from_user)
+        code = await ensure_referral_code(session, user)
+        await session.commit()
+
+    username = await get_bot_username(message.bot)
+    if not username:
+        await message.answer(
+            get_text("error_general"),
+            reply_markup=user_main_menu(message.from_user.id),
+        )
+        return
+
+    await message.answer(
+        get_text(
+            "referral_invite",
+            code=code,
+            link=referral_link(username, code),
+        ),
         reply_markup=user_main_menu(message.from_user.id),
     )
 
@@ -444,15 +526,24 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext):
     
     try:
         async with AsyncSessionLocal() as session:
-            user = await get_or_create_user(session, callback.from_user)
-            
-            # Create order with server-resolved pricing
+            user, _ = await get_or_create_user(session, callback.from_user)
+
+            original_price = price
+            discount_applied = False
+            if await is_discount_eligible(session, user):
+                payable, original_price, discount_applied = apply_purchase_discount(
+                    price
+                )
+                price = payable
+
             order = Order(
                 user_id=callback.from_user.id,
                 days=days,
                 traffic_gb=traffic_gb,
                 price=price,
+                original_price=original_price,
                 plan_id=plan_id,
+                referral_discount_applied=discount_applied,
                 status="pending",
             )
             session.add(order)
@@ -1090,12 +1181,13 @@ async def confirm_renew_order(callback: CallbackQuery, state: FSMContext):
             await state.clear()
             return
 
-        user = await get_or_create_user(session, callback.from_user)
+        await get_or_create_user(session, callback.from_user)
         order = Order(
             user_id=callback.from_user.id,
             days=days,
             traffic_gb=traffic_gb,
             price=price,
+            original_price=price,
             plan_id=plan_id,
             renew_vpn_account_id=renew_vpn_account_id,
             status="pending",

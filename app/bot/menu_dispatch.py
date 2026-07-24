@@ -7,6 +7,7 @@ from app.bot.constants import (
     BTN_CUSTOM_PLAN,
     BTN_MY_ACCOUNTS,
     BTN_MY_ORDERS,
+    BTN_REFERRAL,
     BTN_WALLET,
     CANCEL_BUTTON,
     MAIN_MENU_BUTTONS,
@@ -44,6 +45,10 @@ async def dispatch_main_menu(message: Message, state: FSMContext) -> bool:
         from app.bot.handlers.wallet import show_wallet
 
         await show_wallet(message, state)
+    elif text == BTN_REFERRAL:
+        from app.bot.handlers.user import show_referral
+
+        await show_referral(message, state)
     elif text == BTN_ADMIN_PANEL:
         from app.bot.handlers.admin import admin_menu
 

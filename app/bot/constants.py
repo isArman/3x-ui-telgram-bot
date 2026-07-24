@@ -8,6 +8,7 @@ BTN_CUSTOM_PLAN = "🎨 پلن سفارشی"
 BTN_MY_ORDERS = "📋 سفارش‌های من"
 BTN_MY_ACCOUNTS = "💳 اکانت‌های من"
 BTN_WALLET = "💰 کیف پول من"
+BTN_REFERRAL = "🎁 دعوت دوستان"
 BTN_TOP_UP = "💳 شارژ کیف پول"
 BTN_ADMIN_PANEL = "⚙️ پنل ادمین"
 
@@ -18,6 +19,7 @@ MAIN_MENU_BUTTONS = frozenset(
         BTN_MY_ORDERS,
         BTN_MY_ACCOUNTS,
         BTN_WALLET,
+        BTN_REFERRAL,
         BTN_ADMIN_PANEL,
         CANCEL_BUTTON,
     }

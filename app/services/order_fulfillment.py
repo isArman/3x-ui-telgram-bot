@@ -23,6 +23,7 @@ class FulfillResult:
     plan_config_id: int | None = None
     config_ref: str | None = None
     plan_name: str | None = None
+    referral_cashback: tuple[int, int] | None = None  # (referrer_id, amount)
 
 
 async def _try_auto_provision(
@@ -47,7 +48,10 @@ async def complete_payment_approval(
     config_text: str,
     plan_config_id: int | None = None,
     config_ref: str | None = None,
-) -> None:
+) -> tuple[int, int] | None:
+    """Complete new-order payment. Returns referral cashback (referrer_id, amount) if any."""
+    from app.services.referral import grant_referral_cashback
+
     payment.status = "approved"
     payment.reviewed_at = datetime.utcnow()
     payment.reviewed_by = admin_id
@@ -63,7 +67,9 @@ async def complete_payment_approval(
         is_active=True,
     )
     session.add(vpn_account)
+    cashback = await grant_referral_cashback(session, order)
     await session.commit()
+    return cashback
 
 
 async def complete_renewal_approval(
@@ -134,7 +140,7 @@ async def fulfill_paid_order(
     # New account — auto 3x-ui
     sub_url = await _try_auto_provision(session, order, user)
     if sub_url:
-        await complete_payment_approval(
+        cashback = await complete_payment_approval(
             session,
             payment,
             order,
@@ -147,6 +153,7 @@ async def fulfill_paid_order(
             config_text=sub_url,
             config_ref="xui-auto",
             plan_name=plan_name,
+            referral_cashback=cashback,
         )
 
     # Inventory fallback
@@ -155,7 +162,7 @@ async def fulfill_paid_order(
             session, order.plan_id, order.id
         )
         if config_entry:
-            await complete_payment_approval(
+            cashback = await complete_payment_approval(
                 session,
                 payment,
                 order,
@@ -168,6 +175,7 @@ async def fulfill_paid_order(
                 config_text=config_entry.config_text,
                 plan_config_id=config_entry.id,
                 plan_name=plan_name,
+                referral_cashback=cashback,
             )
 
     return FulfillResult(kind="needs_manual", plan_name=plan_name)

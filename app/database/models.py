@@ -17,6 +17,12 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     is_blocked: Mapped[bool] = mapped_column(Boolean, default=False)
     balance: Mapped[int] = mapped_column(Integer, default=0)
+    referral_code: Mapped[Optional[str]] = mapped_column(
+        String(32), unique=True, nullable=True, index=True
+    )
+    referred_by_user_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey("users.id"), nullable=True, index=True
+    )
 
 
 class Order(Base):
@@ -29,9 +35,12 @@ class Order(Base):
     days: Mapped[int] = mapped_column(Integer, nullable=False)
     traffic_gb: Mapped[int] = mapped_column(Integer, nullable=False)
     price: Mapped[int] = mapped_column(Integer, nullable=False)
+    original_price: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     plan_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     renew_vpn_account_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     wallet_debit: Mapped[int] = mapped_column(Integer, default=0)
+    referral_discount_applied: Mapped[bool] = mapped_column(Boolean, default=False)
+    referral_cashback_paid: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[str] = mapped_column(String(50), default="pending")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(

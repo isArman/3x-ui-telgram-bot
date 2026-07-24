@@ -63,6 +63,7 @@ async def show_wallet(message: Message, state: FSMContext):
     await state.clear()
     async with AsyncSessionLocal() as session:
         await get_or_create_user(session, message.from_user)
+        await session.commit()
         balance = await get_balance(session, message.from_user.id)
 
     await state.set_state(WalletStates.home)

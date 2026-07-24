@@ -35,6 +35,14 @@ async def _migrate_sqlite_columns(conn):
         await conn.execute(
             text("ALTER TABLE users ADD COLUMN balance INTEGER DEFAULT 0")
         )
+    if "referral_code" not in user_cols:
+        await conn.execute(
+            text("ALTER TABLE users ADD COLUMN referral_code VARCHAR(32)")
+        )
+    if "referred_by_user_id" not in user_cols:
+        await conn.execute(
+            text("ALTER TABLE users ADD COLUMN referred_by_user_id BIGINT")
+        )
 
     result = await conn.execute(text("PRAGMA table_info(orders)"))
     order_cols = {row[1] for row in result.fetchall()}
@@ -47,6 +55,22 @@ async def _migrate_sqlite_columns(conn):
     if "wallet_debit" not in order_cols:
         await conn.execute(
             text("ALTER TABLE orders ADD COLUMN wallet_debit INTEGER DEFAULT 0")
+        )
+    if "original_price" not in order_cols:
+        await conn.execute(text("ALTER TABLE orders ADD COLUMN original_price INTEGER"))
+    if "referral_discount_applied" not in order_cols:
+        await conn.execute(
+            text(
+                "ALTER TABLE orders ADD COLUMN referral_discount_applied "
+                "BOOLEAN DEFAULT 0"
+            )
+        )
+    if "referral_cashback_paid" not in order_cols:
+        await conn.execute(
+            text(
+                "ALTER TABLE orders ADD COLUMN referral_cashback_paid "
+                "BOOLEAN DEFAULT 0"
+            )
         )
 
     result = await conn.execute(text("PRAGMA table_info(vpn_accounts)"))
@@ -68,6 +92,38 @@ async def _migrate_sqlite_columns(conn):
                 "ALTER TABLE vpn_accounts "
                 "ADD COLUMN traffic_low_notified BOOLEAN DEFAULT 0"
             )
+        )
+
+
+async def _backfill_referral_codes(conn):
+    """Assign referral codes to users that still lack one."""
+    result = await conn.execute(
+        text("SELECT id FROM users WHERE referral_code IS NULL OR referral_code = ''")
+    )
+    rows = result.fetchall()
+    if not rows:
+        return
+
+    # Import here to avoid circular imports at module load
+    from app.services.referral import generate_referral_code
+
+    existing = await conn.execute(
+        text("SELECT referral_code FROM users WHERE referral_code IS NOT NULL")
+    )
+    used = {row[0] for row in existing.fetchall() if row[0]}
+
+    for (user_id,) in rows:
+        code = generate_referral_code(user_id)
+        # Ensure uniqueness within this backfill pass
+        base = code
+        n = 0
+        while code in used:
+            n += 1
+            code = f"{base}{n}"
+        used.add(code)
+        await conn.execute(
+            text("UPDATE users SET referral_code = :code WHERE id = :uid"),
+            {"code": code, "uid": user_id},
         )
 
 
@@ -96,6 +152,10 @@ async def _migrate_sqlite_indexes(conn):
         "CREATE INDEX IF NOT EXISTS ix_plan_configs_plan_id ON plan_configs(plan_id)",
         "CREATE INDEX IF NOT EXISTS ix_plan_configs_order_id ON plan_configs(order_id)",
         "CREATE INDEX IF NOT EXISTS ix_wallet_topups_user_id ON wallet_topups(user_id)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_referral_code "
+        "ON users(referral_code) WHERE referral_code IS NOT NULL",
+        "CREATE INDEX IF NOT EXISTS ix_users_referred_by_user_id "
+        "ON users(referred_by_user_id)",
         # At most one pending payment per order
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_payments_pending_order "
         "ON payments(order_id) WHERE status = 'pending'",
@@ -111,3 +171,4 @@ async def init_db():
         if settings.DATABASE_URL.startswith("sqlite"):
             await _migrate_sqlite_columns(conn)
             await _migrate_sqlite_indexes(conn)
+            await _backfill_referral_codes(conn)

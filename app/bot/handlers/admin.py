@@ -353,6 +353,11 @@ async def approve_payment(callback: CallbackQuery, state: FSMContext):
             await callback.answer(str(exc), show_alert=True)
             return
 
+        if fulfill.referral_cashback:
+            from app.bot.handlers.user import notify_referral_cashback
+
+            await notify_referral_cashback(callback.bot, fulfill.referral_cashback)
+
         if fulfill.kind == "renewal_auto":
             logger.info(
                 "Auto-renewed account %s for order %s", fulfill.vpn_account.id, order.id
@@ -466,9 +471,13 @@ async def receive_subscription(message: Message, state: FSMContext):
             await state.clear()
             return
 
-        await complete_payment_approval(
+        cashback = await complete_payment_approval(
             session, payment, order, message.from_user.id, config_text
         )
+
+        from app.bot.handlers.user import notify_referral_cashback
+
+        await notify_referral_cashback(message.bot, cashback)
 
         try:
             await send_config_to_user(message.bot, order.user_id, config_text)
