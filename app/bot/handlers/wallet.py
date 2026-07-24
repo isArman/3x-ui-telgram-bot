@@ -21,7 +21,7 @@ from app.bot.keyboards.user import (
     wallet_keyboard,
 )
 from app.bot.menu_dispatch import dispatch_main_menu
-from app.bot.states import TopUpStates
+from app.bot.states import TopUpStates, WalletStates
 from app.config.settings import settings
 from app.config.texts import get_text
 from app.database.models import WalletTopUp
@@ -37,6 +37,10 @@ def user_main_menu(user_id: int):
     return main_menu_keyboard(is_admin=user_id in settings.ADMIN_IDS)
 
 
+@router.message(
+    WalletStates.home,
+    F.text.in_(MAIN_MENU_BUTTONS - {CANCEL_BUTTON}),
+)
 @router.message(
     TopUpStates.waiting_for_amount,
     F.text.in_(MAIN_MENU_BUTTONS),
@@ -61,9 +65,20 @@ async def show_wallet(message: Message, state: FSMContext):
         await get_or_create_user(session, message.from_user)
         balance = await get_balance(session, message.from_user.id)
 
+    await state.set_state(WalletStates.home)
     await message.answer(
         get_text("wallet_home", balance=balance),
         reply_markup=wallet_keyboard(),
+    )
+
+
+@router.message(WalletStates.home, F.text.in_({BACK_BUTTON, CANCEL_BUTTON}))
+async def wallet_home_back(message: Message, state: FSMContext):
+    """Return to main menu from wallet home (بازگشت / لغو)."""
+    await state.clear()
+    await message.answer(
+        get_text("start"),
+        reply_markup=user_main_menu(message.from_user.id),
     )
 
 

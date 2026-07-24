@@ -11,6 +11,10 @@ class PaymentStates(StatesGroup):
     waiting_for_receipt = State()
 
 
+class WalletStates(StatesGroup):
+    home = State()
+
+
 class TopUpStates(StatesGroup):
     waiting_for_amount = State()
     waiting_for_confirm = State()
