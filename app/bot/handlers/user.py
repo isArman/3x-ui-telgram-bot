@@ -43,7 +43,10 @@ from app.services.order_fulfillment import fulfill_paid_order
 from app.services.referral import (
     apply_purchase_discount,
     ensure_referral_code,
+    format_order_price_lines,
+    format_price_block,
     is_discount_eligible,
+    preview_discounted_price,
     referral_link,
     try_bind_referrer,
 )
@@ -85,8 +88,10 @@ def user_main_menu(user_id: int):
     return main_menu_keyboard(is_admin=user_id in settings.ADMIN_IDS)
 
 
-def build_plans_text(plans: list) -> str:
+def build_plans_text(plans: list, *, referral_hint: str = "") -> str:
     text = get_text("plans_list")
+    if referral_hint:
+        text += referral_hint
     if not plans:
         return text + "هنوز پلن آماده‌ای تعریف نشده است.\n"
     for plan in plans:
@@ -94,12 +99,31 @@ def build_plans_text(plans: list) -> str:
     return text
 
 
-async def send_plans_menu(bot, chat_id: int) -> None:
+async def referral_plans_hint_for(session: AsyncSession, tg_user) -> str:
+    user, _ = await get_or_create_user(session, tg_user)
+    if await is_discount_eligible(session, user):
+        return get_text("referral_plans_hint")
+    return ""
+
+
+async def price_block_for_tg_user(session: AsyncSession, tg_user, list_price: int) -> str:
+    user, _ = await get_or_create_user(session, tg_user)
+    eligible = await is_discount_eligible(session, user)
+    payable, original, applied = preview_discounted_price(
+        list_price, eligible=eligible
+    )
+    return format_price_block(original, payable=payable, applied=applied)
+
+
+async def send_plans_menu(bot, chat_id: int, tg_user=None) -> None:
     async with AsyncSessionLocal() as session:
         plans = await list_active_plans(session)
+        hint = ""
+        if tg_user is not None:
+            hint = await referral_plans_hint_for(session, tg_user)
     await bot.send_message(
         chat_id=chat_id,
-        text=build_plans_text(plans),
+        text=build_plans_text(plans, referral_hint=hint),
         reply_markup=plans_keyboard(plans),
     )
 
@@ -157,21 +181,13 @@ async def prompt_wallet_payment(bot, user_id: int, order: Order, state: FSMConte
     async with AsyncSessionLocal() as session:
         balance = await get_balance(session, user_id)
 
-    discount_note = ""
-    if order.referral_discount_applied and order.original_price:
-        discount_note = get_text(
-            "referral_discount_note",
-            original_price=order.original_price,
-        )
-
     await bot.send_message(
         chat_id=user_id,
         text=get_text(
             "wallet_pay_prompt",
             order_id=order.id,
-            price=order.price,
+            price_lines=format_order_price_lines(order),
             balance=balance,
-            discount_note=discount_note,
         ),
         reply_markup=wallet_pay_keyboard(),
     )
@@ -203,11 +219,12 @@ async def send_card_payment_instructions(
         return
 
     difference = order.price - wallet_amount
+    price_lines = format_order_price_lines(order)
     if wallet_amount > 0:
         text = get_text(
             "order_created_partial",
             order_id=order.id,
-            price=order.price,
+            price_lines=price_lines,
             wallet_amount=wallet_amount,
             difference=difference,
             card_number=card_number,
@@ -217,7 +234,7 @@ async def send_card_payment_instructions(
         text = get_text(
             "order_created",
             order_id=order.id,
-            price=order.price,
+            price_lines=price_lines,
             card_number=card_number,
             card_holder=card_holder,
         )
@@ -353,14 +370,23 @@ async def cmd_start(message: Message, state: FSMContext):
         if len(parts) > 1:
             payload = parts[1].strip() or None
 
+    bound = False
+    eligible = False
     async with AsyncSessionLocal() as session:
         user, created = await get_or_create_user_from_message(session, message)
         if created and payload:
-            await try_bind_referrer(session, user, payload, is_new_user=True)
+            bound = await try_bind_referrer(session, user, payload, is_new_user=True)
         await session.commit()
+        eligible = await is_discount_eligible(session, user)
+
+    text = get_text("start")
+    if bound:
+        text += get_text("referral_bound_notice")
+    elif eligible:
+        text += get_text("referral_eligible_notice")
 
     await message.answer(
-        get_text("start"),
+        text,
         reply_markup=user_main_menu(message.from_user.id),
     )
 
@@ -373,6 +399,13 @@ async def show_referral(message: Message, state: FSMContext):
         user, _ = await get_or_create_user(session, message.from_user)
         code = await ensure_referral_code(session, user)
         await session.commit()
+
+        if await is_discount_eligible(session, user):
+            status_line = get_text("referral_status_active")
+        elif user.referred_by_user_id:
+            status_line = get_text("referral_status_used")
+        else:
+            status_line = get_text("referral_status_none")
 
     username = await get_bot_username(message.bot)
     if not username:
@@ -387,6 +420,7 @@ async def show_referral(message: Message, state: FSMContext):
             "referral_invite",
             code=code,
             link=referral_link(username, code),
+            status_line=status_line,
         ),
         reply_markup=user_main_menu(message.from_user.id),
     )
@@ -398,8 +432,9 @@ async def show_plans(message: Message, state: FSMContext):
     await state.clear()
     async with AsyncSessionLocal() as session:
         plans = await list_active_plans(session)
+        hint = await referral_plans_hint_for(session, message.from_user)
     await message.answer(
-        build_plans_text(plans),
+        build_plans_text(plans, referral_hint=hint),
         reply_markup=plans_keyboard(plans),
     )
 
@@ -410,10 +445,12 @@ async def select_plan(callback: CallbackQuery, state: FSMContext):
     plan_id = callback.data.split(":")[1]
     async with AsyncSessionLocal() as session:
         plan = await get_plan(session, plan_id, active_only=True)
-
-    if not plan:
-        await callback.answer("پلن یافت نشد!", show_alert=True)
-        return
+        if not plan:
+            await callback.answer("پلن یافت نشد!", show_alert=True)
+            return
+        price_block = await price_block_for_tg_user(
+            session, callback.from_user, plan["price"]
+        )
 
     await state.clear()
     await state.update_data(
@@ -423,8 +460,18 @@ async def select_plan(callback: CallbackQuery, state: FSMContext):
         price=plan["price"],
     )
 
+    desc = (plan.get("description") or "").strip()
+    desc_block = f"{desc}\n" if desc else ""
+
     await callback.message.edit_text(
-        get_text("custom_plan_confirm", **plan),
+        get_text(
+            "plan_confirm",
+            name=plan["name"],
+            days=plan["days"],
+            traffic=plan["traffic"],
+            price_block=price_block,
+            description=desc_block,
+        ),
         reply_markup=confirm_order_keyboard("back:plans"),
     )
     await callback.answer()
@@ -498,12 +545,20 @@ async def custom_plan_traffic(message: Message, state: FSMContext):
         days = data["days"]
         async with AsyncSessionLocal() as session:
             pricing = await get_pricing(session)
-        price = calculate_custom_price(days, traffic, pricing)
+            price = calculate_custom_price(days, traffic, pricing)
+            price_block = await price_block_for_tg_user(
+                session, message.from_user, price
+            )
 
         await state.update_data(traffic=traffic, price=price, plan_id=None)
 
         await message.answer(
-            get_text("custom_plan_confirm", days=days, traffic=traffic, price=price),
+            get_text(
+                "custom_plan_confirm",
+                days=days,
+                traffic=traffic,
+                price_block=price_block,
+            ),
             reply_markup=confirm_order_keyboard("back:custom_traffic"),
         )
         await state.set_state(CustomPlanStates.waiting_for_confirm)
@@ -797,7 +852,7 @@ async def back_to_plans(callback: CallbackQuery, state: FSMContext):
     """Return to plans list from plan confirmation."""
     await state.clear()
     await callback.message.delete()
-    await send_plans_menu(callback.bot, callback.from_user.id)
+    await send_plans_menu(callback.bot, callback.from_user.id, callback.from_user)
     await callback.answer()
 
 

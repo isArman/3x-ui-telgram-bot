@@ -142,6 +142,46 @@ def apply_purchase_discount(original_price: int) -> tuple[int, int, bool]:
     return payable, original, discount > 0
 
 
+def preview_discounted_price(list_price: int, *, eligible: bool) -> tuple[int, int, bool]:
+    """Returns (payable, original, applied) for UI previews."""
+    if eligible:
+        return apply_purchase_discount(list_price)
+    price = int(list_price)
+    return price, price, False
+
+
+def format_price_block(
+    list_price: int,
+    *,
+    payable: int | None = None,
+    applied: bool = False,
+) -> str:
+    """Human-readable price lines for confirms / checkout (no hype)."""
+    original = int(list_price)
+    if applied and payable is not None and int(payable) < original:
+        pay = int(payable)
+        saved = original - pay
+        return (
+            f"💰 قابل پرداخت: {pay:,} تومان\n"
+            f"🏷 قیمت پلن: {original:,} تومان\n"
+            f"📉 تخفیف معرفی ({DISCOUNT_PERCENT}٪): −{saved:,} تومان"
+        )
+    return f"💰 قیمت: {original:,} تومان"
+
+
+def format_order_price_lines(order: Order) -> str:
+    """Price summary for an already-created order."""
+    payable = int(order.price)
+    original = int(
+        order.original_price if order.original_price is not None else order.price
+    )
+    return format_price_block(
+        original,
+        payable=payable,
+        applied=bool(order.referral_discount_applied) and payable < original,
+    )
+
+
 async def grant_referral_cashback(
     session: AsyncSession, order: Order
 ) -> tuple[int, int] | None:
