@@ -6,8 +6,11 @@ from app.services.panel_settings import (
     PROVISIONING_MANUAL,
     get_panel_password,
     get_panel_settings,
+    get_selected_inbound_ids,
     is_auto_provisioning_ready,
+    prune_selected_inbound_ids,
     set_panel_password,
+    set_selected_inbound_ids,
 )
 
 
@@ -58,3 +61,11 @@ async def test_get_panel_settings_creates_default_row():
         row = await get_panel_settings(session)
         assert row.id == 1
         assert row.provisioning_mode == PROVISIONING_MANUAL
+
+
+def test_prune_selected_inbound_ids_drops_stale():
+    panel = PanelSettings(id=1)
+    set_selected_inbound_ids(panel, [1, 5, 9, 10])
+    kept = prune_selected_inbound_ids(panel, [1, 9, 10, 15])
+    assert kept == [1, 9, 10]
+    assert get_selected_inbound_ids(panel) == [1, 9, 10]

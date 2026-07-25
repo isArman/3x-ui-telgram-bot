@@ -73,14 +73,29 @@ def get_selected_inbound_ids(settings: PanelSettings) -> List[int]:
         return []
 
 
+def set_selected_inbound_ids(settings: PanelSettings, inbound_ids: List[int]) -> List[int]:
+    cleaned = sorted({int(x) for x in inbound_ids})
+    settings.selected_inbound_ids = json.dumps(cleaned)
+    return cleaned
+
+
 def toggle_inbound_id(settings: PanelSettings, inbound_id: int) -> List[int]:
     current = set(get_selected_inbound_ids(settings))
     if inbound_id in current:
         current.remove(inbound_id)
     else:
         current.add(inbound_id)
-    settings.selected_inbound_ids = json.dumps(sorted(current))
-    return sorted(current)
+    return set_selected_inbound_ids(settings, sorted(current))
+
+
+def prune_selected_inbound_ids(
+    settings: PanelSettings,
+    valid_inbound_ids: List[int],
+) -> List[int]:
+    """Keep only inbound IDs that still exist on the panel. Returns the pruned list."""
+    valid = set(int(x) for x in valid_inbound_ids)
+    kept = [i for i in get_selected_inbound_ids(settings) if i in valid]
+    return set_selected_inbound_ids(settings, kept)
 
 
 def is_auto_provisioning_ready(settings: PanelSettings) -> bool:

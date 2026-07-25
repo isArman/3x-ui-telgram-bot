@@ -200,6 +200,57 @@ class XUIClient:
             raise XUIError("Client created but could not be fetched")
         return detail
 
+    async def sync_client_inbounds(
+        self,
+        email: str,
+        inbound_ids: list[int],
+    ) -> dict[str, Any]:
+        """Attach missing inbounds and detach ones no longer selected."""
+        assert self._client
+        detail = await self.get_client(email)
+        if not detail:
+            raise XUIError(f"Client {email} not found")
+
+        current_ids = set(detail.get("inboundIds") or [])
+        desired_ids = set(inbound_ids)
+        missing = sorted(desired_ids - current_ids)
+        extra = sorted(current_ids - desired_ids)
+
+        if missing:
+            token = await self._csrf_token()
+            attach_resp = await self._client.post(
+                self._url(f"/panel/api/clients/{email}/attach"),
+                json={"inboundIds": missing},
+                headers={"X-CSRF-Token": token},
+            )
+            attach_resp.raise_for_status()
+            attach_data = attach_resp.json()
+            if not attach_data.get("success"):
+                raise XUIError(
+                    attach_data.get("msg")
+                    or f"Failed to attach client {email} to inbounds {missing}"
+                )
+
+        if extra:
+            token = await self._csrf_token()
+            detach_resp = await self._client.post(
+                self._url(f"/panel/api/clients/{email}/detach"),
+                json={"inboundIds": extra},
+                headers={"X-CSRF-Token": token},
+            )
+            detach_resp.raise_for_status()
+            detach_data = detach_resp.json()
+            if not detach_data.get("success"):
+                raise XUIError(
+                    detach_data.get("msg")
+                    or f"Failed to detach client {email} from inbounds {extra}"
+                )
+
+        detail = await self.get_client(email)
+        if not detail:
+            raise XUIError("Client inbound sync succeeded but client could not be fetched")
+        return detail
+
     async def update_client(
         self,
         email: str,
@@ -218,30 +269,7 @@ class XUIClient:
         if not data.get("success"):
             raise XUIError(data.get("msg") or "Failed to update client")
 
-        detail = await self.get_client(email)
-        if detail:
-            current_ids = set(detail.get("inboundIds") or [])
-            missing = [i for i in inbound_ids if i not in current_ids]
-            if missing:
-                attach_token = await self._csrf_token()
-                attach_resp = await self._client.post(
-                    self._url(f"/panel/api/clients/{email}/attach"),
-                    json={"inboundIds": missing},
-                    headers={"X-CSRF-Token": attach_token},
-                )
-                attach_resp.raise_for_status()
-                attach_data = attach_resp.json()
-                if not attach_data.get("success"):
-                    logger.warning(
-                        "Failed to attach client %s to inbounds %s: %s",
-                        email,
-                        missing,
-                        attach_data.get("msg"),
-                    )
-            detail = await self.get_client(email)
-        if not detail:
-            raise XUIError("Client updated but could not be fetched")
-        return detail
+        return await self.sync_client_inbounds(email, inbound_ids)
 
     async def upsert_client(
         self,

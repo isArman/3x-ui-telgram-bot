@@ -15,10 +15,12 @@ from app.services.panel_settings import (
     get_panel_password,
     get_panel_settings,
     get_selected_inbound_ids,
+    prune_selected_inbound_ids,
     set_panel_password,
     toggle_inbound_id,
     xui_client_for_panel,
 )
+from app.services.xui_provisioning import sync_active_clients_inbounds
 from app.utils.logger import logger
 from app.utils.validation import is_valid_subscription_base_url
 from app.xui.client import XUIClient, XUIError, normalize_panel_url
@@ -342,8 +344,13 @@ async def panel_list_inbounds(callback: CallbackQuery):
             await callback.answer("خطا در دریافت inboundها", show_alert=True)
             return
 
+        live_ids = [int(ib["id"]) for ib in inbounds if ib.get("id") is not None]
+        before = get_selected_inbound_ids(ps)
+        selected_list = prune_selected_inbound_ids(ps, live_ids)
+        if selected_list != before:
+            await session.commit()
         enabled = [ib for ib in inbounds if ib.get("enable")]
-        selected = set(get_selected_inbound_ids(ps))
+        selected = set(selected_list)
         await callback.message.edit_text(
             "Inboundهایی که برای کاربران استفاده می‌شوند را انتخاب کنید:\n"
             "(روی هر مورد بزنید تا ✅/⬜ شود)",
@@ -388,13 +395,33 @@ async def panel_inbounds_save(callback: CallbackQuery):
 
     async with AsyncSessionLocal() as session:
         ps = await get_panel_settings(session)
-        selected = get_selected_inbound_ids(ps)
+        try:
+            async with xui_client_for_panel(ps) as client:
+                inbounds = await client.list_inbounds()
+        except Exception as exc:
+            logger.error("Prune inbounds on save failed: %s", exc)
+            await callback.answer("خطا در ارتباط با پنل", show_alert=True)
+            return
+
+        live_ids = [int(ib["id"]) for ib in inbounds if ib.get("id") is not None]
+        selected = prune_selected_inbound_ids(ps, live_ids)
+        await session.commit()
         if not selected:
             await callback.answer("حداقل یک inbound انتخاب کنید.", show_alert=True)
             return
-        text = await _panel_status_text(session)
+
+        await callback.answer("در حال همگام‌سازی کاربران…")
         await callback.message.edit_text(
-            text + f"\n\n✅ {len(selected)} inbound ذخیره شد.",
+            f"⏳ در حال اعمال {len(selected)} inbound روی اکانت‌های فعال…"
+        )
+        ok, fail = await sync_active_clients_inbounds(session, ps, selected)
+        text = await _panel_status_text(session)
+        summary = f"\n\n✅ {len(selected)} inbound ذخیره شد."
+        if ok or fail:
+            summary += f"\nهمگام‌سازی کلاینت‌ها: {ok} موفق"
+            if fail:
+                summary += f" / {fail} ناموفق"
+        await callback.message.edit_text(
+            text + summary,
             reply_markup=panel_menu_keyboard(ps.provisioning_mode, ps.is_verified),
         )
-    await callback.answer("ذخیره شد")
