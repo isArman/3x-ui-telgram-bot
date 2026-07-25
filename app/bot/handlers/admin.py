@@ -9,6 +9,7 @@ from app.bot.auth import is_admin
 from app.bot.constants import (
     ADMIN_MENU_TEXT,
     BTN_ADMIN_PANEL,
+    CANCEL_BUTTON,
     CONFIGS_MENU_TEXT,
     MAIN_MENU_BUTTONS,
 )
@@ -180,10 +181,11 @@ async def admin_menu(message: Message, state: FSMContext):
 
 
 @router.callback_query(F.data == "admin:menu")
-async def admin_menu_callback(callback: CallbackQuery):
+async def admin_menu_callback(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
         await callback.answer("دسترسی ندارید!", show_alert=True)
         return
+    await state.clear()
     await callback.message.edit_text(
         ADMIN_MENU_TEXT,
         reply_markup=admin_menu_keyboard(),
@@ -286,7 +288,9 @@ async def configs_add_plan(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminStates.waiting_for_config_text)
     await callback.message.answer(
         f"➕ افزودن کانفیگ برای «{plan['name']}»\n\n"
-        "لینک subscription یا کانفیگ کامل (vless:// ...) را ارسال کنید:"
+        "لینک subscription یا کانفیگ کامل (vless:// ...) را ارسال کنید:\n"
+        f"برای لغو: «{CANCEL_BUTTON}»",
+        reply_markup=admin_cancel_keyboard(),
     )
     await callback.answer()
 
@@ -294,6 +298,15 @@ async def configs_add_plan(callback: CallbackQuery, state: FSMContext):
 @router.message(AdminStates.waiting_for_config_text)
 async def configs_receive_text(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
+        return
+
+    if message.text == CANCEL_BUTTON:
+        await state.clear()
+        await message.answer(
+            "افزودن کانفیگ لغو شد.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        await show_admin_menu(message)
         return
 
     if not message.text or not message.text.strip():
@@ -321,9 +334,11 @@ async def configs_receive_text(message: Message, state: FSMContext):
 
     await message.answer(
         f"✅ کانفیگ #{entry.id} به «{plan['name']}» اضافه شد.\n"
-        f"📦 موجودی آزاد: {available}"
+        f"📦 موجودی آزاد: {available}",
+        reply_markup=ReplyKeyboardRemove(),
     )
     await state.clear()
+    await show_admin_menu(message)
 
 
 # --- Payment approval ---
@@ -441,7 +456,7 @@ async def receive_subscription(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
 
-    if message.text == "❌ لغو":
+    if message.text == CANCEL_BUTTON:
         await state.clear()
         await message.answer(
             "ارسال لینک لغو شد. پرداخت همچنان در انتظار است.",
@@ -656,7 +671,7 @@ async def manual_topup_amount(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
 
-    if message.text == "❌ لغو":
+    if message.text == CANCEL_BUTTON:
         await state.clear()
         await message.answer(
             "ثبت مبلغ دستی لغو شد.",

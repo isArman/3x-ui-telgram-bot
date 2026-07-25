@@ -6,7 +6,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
 
 from app.bot.auth import is_admin
-from app.bot.constants import MAIN_MENU_BUTTONS
+from app.bot.constants import ADMIN_MENU_TEXT, CANCEL_BUTTON, MAIN_MENU_BUTTONS
 from app.bot.keyboards.admin import (
     admin_cancel_keyboard,
     admin_menu_keyboard,
@@ -16,8 +16,10 @@ from app.bot.keyboards.admin import (
     plans_admin_keyboard,
     pricing_admin_keyboard,
 )
+from app.bot.keyboards.user import main_menu_keyboard
 from app.bot.menu_dispatch import dispatch_main_menu
 from app.bot.states import AdminStates
+from app.config.settings import settings
 from app.config.texts import get_text
 from app.database.session import AsyncSessionLocal
 from app.services.bot_settings import (
@@ -59,6 +61,17 @@ def _card_text(card_number: str | None, card_holder: str | None) -> str:
         f"نام صاحب کارت: {card_holder or '—'}\n\n"
         "این مقادیر برای خرید و شارژ کیف پول به کاربر نشان داده می‌شوند."
     )
+
+
+async def _cancel_shop_edit(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await message.answer(
+        "لغو شد.",
+        reply_markup=main_menu_keyboard(
+            is_admin=message.from_user.id in settings.ADMIN_IDS
+        ),
+    )
+    await message.answer(ADMIN_MENU_TEXT, reply_markup=admin_menu_keyboard())
 
 
 @router.message(_SHOP_FSM, F.text.in_(MAIN_MENU_BUTTONS))
@@ -113,9 +126,8 @@ async def admin_card_holder_start(callback: CallbackQuery, state: FSMContext):
 async def admin_card_number_save(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
-    if message.text == "❌ لغو":
-        await state.clear()
-        await message.answer("لغو شد.", reply_markup=ReplyKeyboardRemove())
+    if message.text == CANCEL_BUTTON:
+        await _cancel_shop_edit(message, state)
         return
     value = (message.text or "").strip()
     if len(value) < 4:
@@ -135,9 +147,8 @@ async def admin_card_number_save(message: Message, state: FSMContext):
 async def admin_card_holder_save(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
-    if message.text == "❌ لغو":
-        await state.clear()
-        await message.answer("لغو شد.", reply_markup=ReplyKeyboardRemove())
+    if message.text == CANCEL_BUTTON:
+        await _cancel_shop_edit(message, state)
         return
     value = (message.text or "").strip()
     if len(value) < 2:
@@ -226,10 +237,21 @@ async def admin_plan_toggle(callback: CallbackQuery):
             await callback.answer("پلن یافت نشد!", show_alert=True)
             return
         plan = await set_plan_active(session, plan, not plan.is_active)
+        status = "فعال" if plan.is_active else "غیرفعال"
+        text = (
+            f"📦 {plan.name}\n\n"
+            f"🆔 `{plan.id}`\n"
+            f"⏱ {plan.days} روز\n"
+            f"📊 {plan.traffic_gb} گیگابایت\n"
+            f"💰 {plan.price:,} تومان\n"
+            f"📝 {plan.description or '—'}\n"
+            f"وضعیت: {status}"
+        )
+    await callback.message.edit_text(
+        text,
+        reply_markup=plan_admin_detail_keyboard(plan.id, plan.is_active),
+    )
     await callback.answer("وضعیت پلن تغییر کرد.")
-    # Refresh view
-    callback.data = f"admin:plans:view:{plan_id}"
-    await admin_plan_view(callback)
 
 
 @router.callback_query(F.data.startswith("admin:plans:edit:"))
@@ -261,9 +283,8 @@ async def admin_plan_edit_start(callback: CallbackQuery, state: FSMContext):
 async def admin_plan_edit_save(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
-    if message.text == "❌ لغو":
-        await state.clear()
-        await message.answer("لغو شد.", reply_markup=ReplyKeyboardRemove())
+    if message.text == CANCEL_BUTTON:
+        await _cancel_shop_edit(message, state)
         return
 
     data = await state.get_data()
@@ -339,9 +360,8 @@ async def admin_plan_add_start(callback: CallbackQuery, state: FSMContext):
 async def admin_plan_add_id(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
-    if message.text == "❌ لغو":
-        await state.clear()
-        await message.answer("لغو شد.", reply_markup=ReplyKeyboardRemove())
+    if message.text == CANCEL_BUTTON:
+        await _cancel_shop_edit(message, state)
         return
     plan_id = (message.text or "").strip().lower().replace(" ", "_")
     if not plan_id or not plan_id.replace("_", "").replace("-", "").isalnum():
@@ -360,9 +380,8 @@ async def admin_plan_add_id(message: Message, state: FSMContext):
 async def admin_plan_add_name(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
-    if message.text == "❌ لغو":
-        await state.clear()
-        await message.answer("لغو شد.", reply_markup=ReplyKeyboardRemove())
+    if message.text == CANCEL_BUTTON:
+        await _cancel_shop_edit(message, state)
         return
     name = (message.text or "").strip()
     if len(name) < 1:
@@ -377,9 +396,8 @@ async def admin_plan_add_name(message: Message, state: FSMContext):
 async def admin_plan_add_days(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
-    if message.text == "❌ لغو":
-        await state.clear()
-        await message.answer("لغو شد.", reply_markup=ReplyKeyboardRemove())
+    if message.text == CANCEL_BUTTON:
+        await _cancel_shop_edit(message, state)
         return
     try:
         days = int(message.text.strip())
@@ -397,9 +415,8 @@ async def admin_plan_add_days(message: Message, state: FSMContext):
 async def admin_plan_add_traffic(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
-    if message.text == "❌ لغو":
-        await state.clear()
-        await message.answer("لغو شد.", reply_markup=ReplyKeyboardRemove())
+    if message.text == CANCEL_BUTTON:
+        await _cancel_shop_edit(message, state)
         return
     try:
         traffic = int(message.text.strip())
@@ -417,9 +434,8 @@ async def admin_plan_add_traffic(message: Message, state: FSMContext):
 async def admin_plan_add_price(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
-    if message.text == "❌ لغو":
-        await state.clear()
-        await message.answer("لغو شد.", reply_markup=ReplyKeyboardRemove())
+    if message.text == CANCEL_BUTTON:
+        await _cancel_shop_edit(message, state)
         return
     try:
         price = int(message.text.replace(",", "").replace("،", "").strip())
@@ -437,9 +453,8 @@ async def admin_plan_add_price(message: Message, state: FSMContext):
 async def admin_plan_add_description(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
-    if message.text == "❌ لغو":
-        await state.clear()
-        await message.answer("لغو شد.", reply_markup=ReplyKeyboardRemove())
+    if message.text == CANCEL_BUTTON:
+        await _cancel_shop_edit(message, state)
         return
     raw = (message.text or "").strip()
     description = "" if raw in ("-", "—") else raw
@@ -513,9 +528,8 @@ async def admin_pricing_gb_start(callback: CallbackQuery, state: FSMContext):
 async def admin_pricing_day_save(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
-    if message.text == "❌ لغو":
-        await state.clear()
-        await message.answer("لغو شد.", reply_markup=ReplyKeyboardRemove())
+    if message.text == CANCEL_BUTTON:
+        await _cancel_shop_edit(message, state)
         return
     try:
         value = int(message.text.replace(",", "").replace("،", "").strip())
@@ -541,9 +555,8 @@ async def admin_pricing_day_save(message: Message, state: FSMContext):
 async def admin_pricing_gb_save(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
-    if message.text == "❌ لغو":
-        await state.clear()
-        await message.answer("لغو شد.", reply_markup=ReplyKeyboardRemove())
+    if message.text == CANCEL_BUTTON:
+        await _cancel_shop_edit(message, state)
         return
     try:
         value = int(message.text.replace(",", "").replace("،", "").strip())

@@ -301,7 +301,10 @@ async def fulfill_full_wallet_order(bot, session, payment: Payment, order: Order
 
 
 async def refund_wallet_on_cancel(order_id: int | None, user_id: int) -> int | None:
-    """Refund wallet_debit if user abandons a partial-pay order. Returns new balance."""
+    """
+    Abandon an unpaid order: refund wallet_debit if any, mark pending as rejected.
+    Returns new balance when a refund happened, else None.
+    """
     if not order_id:
         return None
 
@@ -314,9 +317,7 @@ async def refund_wallet_on_cancel(order_id: int | None, user_id: int) -> int | N
             return None
         if order.status not in ("pending", "paid"):
             return None
-        if int(order.wallet_debit or 0) <= 0:
-            return None
-        # Only refund if no pending/approved payment yet, or still waiting for card part
+        # Don't touch orders already under admin review
         existing = await session.execute(
             select(Payment).where(
                 Payment.order_id == order_id,
@@ -326,18 +327,24 @@ async def refund_wallet_on_cancel(order_id: int | None, user_id: int) -> int | N
         if existing.scalar_one_or_none():
             return None
 
-        new_balance = await refund_order_wallet_debit(session, order)
+        new_balance = None
+        if int(order.wallet_debit or 0) > 0:
+            new_balance = await refund_order_wallet_debit(session, order)
         if order.status == "pending":
             order.status = "rejected"
-            # keep as abandoned; or leave pending — plan says refund on cancel
         await session.commit()
         return new_balance
 
+
+async def abandon_current_order_if_any(state: FSMContext, user_id: int) -> int | None:
+    data = await state.get_data()
+    return await refund_wallet_on_cancel(data.get("order_id"), user_id)
 
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     """Start command handler — supports /start <referral_code>."""
+    await abandon_current_order_if_any(state, message.from_user.id)
     await state.clear()
 
     payload = None
@@ -760,18 +767,21 @@ async def wallet_pay_yes(callback: CallbackQuery, state: FSMContext):
 
 
 
-@router.message(WalletPayStates.choosing, F.text.in_(MAIN_MENU_BUTTONS))
+@router.message(
+    WalletPayStates.choosing,
+    F.text.in_(MAIN_MENU_BUTTONS | FLOW_NAV_BUTTONS),
+)
 async def wallet_pay_menu_interrupt(message: Message, state: FSMContext):
     from app.bot.menu_dispatch import dispatch_main_menu
 
-    data = await state.get_data()
-    await refund_wallet_on_cancel(data.get("order_id"), message.from_user.id)
+    await abandon_current_order_if_any(state, message.from_user.id)
     await dispatch_main_menu(message, state)
 
 
 @router.callback_query(F.data == "back:main")
 async def back_to_main(callback: CallbackQuery, state: FSMContext):
     """Return to main menu from inline keyboards."""
+    await abandon_current_order_if_any(state, callback.from_user.id)
     await state.clear()
     await callback.message.delete()
     await callback.bot.send_message(
@@ -811,7 +821,8 @@ async def back_to_custom_traffic(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "cancel_order")
 async def cancel_order(callback: CallbackQuery, state: FSMContext):
-    """Cancel order"""
+    """Cancel order / renew confirmation."""
+    await abandon_current_order_if_any(state, callback.from_user.id)
     await state.clear()
     await callback.message.delete()
     await callback.bot.send_message(
@@ -829,14 +840,10 @@ async def payment_back(message: Message, state: FSMContext):
     new_balance = await refund_wallet_on_cancel(order_id, message.from_user.id)
     await state.clear()
     note = ""
-    if new_balance is not None:
+    if order_id:
         note = f"\n\n🔢 سفارش #{order_id} لغو شد."
+    if new_balance is not None:
         note += "\n" + get_text("wallet_refund_on_reject", balance=new_balance)
-    elif order_id:
-        note = (
-            f"\n\n🔢 سفارش #{order_id} همچنان ثبت است. "
-            "برای پرداخت دوباره «خرید پلن» را بزنید."
-        )
     await message.answer(
         get_text("start") + note,
         reply_markup=user_main_menu(message.from_user.id),

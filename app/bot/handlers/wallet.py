@@ -122,9 +122,28 @@ async def topup_amount(message: Message, state: FSMContext):
 
     await state.update_data(topup_amount=amount)
     await state.set_state(TopUpStates.waiting_for_confirm)
+    # Keep reply nav so BACK/CANCEL still work alongside inline confirm.
     await message.answer(
         get_text("wallet_topup_confirm", amount=amount),
         reply_markup=confirm_topup_keyboard(),
+    )
+
+
+@router.message(TopUpStates.waiting_for_confirm, F.text == BACK_BUTTON)
+async def topup_confirm_back(message: Message, state: FSMContext):
+    await state.set_state(TopUpStates.waiting_for_amount)
+    await message.answer(
+        get_text("wallet_topup_ask_amount"),
+        reply_markup=flow_nav_keyboard(),
+    )
+
+
+@router.message(TopUpStates.waiting_for_confirm, F.text == CANCEL_BUTTON)
+async def topup_confirm_cancel(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer(
+        get_text("operation_cancelled"),
+        reply_markup=user_main_menu(message.from_user.id),
     )
 
 

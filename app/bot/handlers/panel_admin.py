@@ -4,10 +4,19 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from app.bot.auth import deny_non_admin_callback, is_admin
-from app.bot.constants import MAIN_MENU_BUTTONS, PANEL_SETUP_CANCEL_TEXTS
-from app.bot.keyboards.admin import inbound_select_keyboard, panel_menu_keyboard
+from app.bot.constants import (
+    MAIN_MENU_BUTTONS,
+    PANEL_SETUP_CANCEL_TEXTS,
+)
+from app.bot.keyboards.admin import (
+    admin_cancel_keyboard,
+    inbound_select_keyboard,
+    panel_menu_keyboard,
+)
+from app.bot.keyboards.user import main_menu_keyboard
 from app.bot.menu_dispatch import dispatch_main_menu
 from app.bot.states import AdminStates
+from app.config.settings import settings
 from app.database.session import AsyncSessionLocal
 from app.services.panel_settings import (
     PROVISIONING_AUTO,
@@ -121,8 +130,9 @@ async def panel_setup_start(callback: CallbackQuery, state: FSMContext):
         "آدرس کامل پنل 3x-ui را بفرستید.\n\n"
         "مثال:\n"
         "`https://example.com:2053/YJBJbvcdMmIAnCYoAN`\n\n"
-        "برای لغو: `❌ لغو`",
+        "برای لغو از دکمه «❌ لغو» استفاده کنید.",
         parse_mode="Markdown",
+        reply_markup=admin_cancel_keyboard(),
     )
     await callback.answer()
 
@@ -145,16 +155,35 @@ async def panel_setup_menu_interrupt(message: Message, state: FSMContext):
     await dispatch_main_menu(message, state)
 
 
+@router.message(
+    StateFilter(*_PANEL_SETUP_STATES),
+    F.text.in_(PANEL_SETUP_CANCEL_TEXTS),
+)
+async def panel_setup_cancel(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    await state.clear()
+    await message.answer(
+        "تنظیم پنل لغو شد.",
+        reply_markup=main_menu_keyboard(
+            is_admin=message.from_user.id in settings.ADMIN_IDS
+        ),
+    )
+    async with AsyncSessionLocal() as session:
+        text = await _panel_status_text(session)
+        ps = await get_panel_settings(session)
+        await message.answer(
+            text,
+            reply_markup=panel_menu_keyboard(ps.provisioning_mode, ps.is_verified),
+        )
+
+
 @router.message(AdminStates.waiting_for_panel_url)
 async def panel_receive_url(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
     if not message.text:
         await message.answer("لطفاً URL را به صورت متن ارسال کنید.")
-        return
-    if message.text.strip() in PANEL_SETUP_CANCEL_TEXTS:
-        await state.clear()
-        await message.answer("تنظیم پنل لغو شد.")
         return
     try:
         url = normalize_panel_url(message.text.strip())
@@ -163,7 +192,10 @@ async def panel_receive_url(message: Message, state: FSMContext):
         return
     await state.update_data(panel_url=url)
     await state.set_state(AdminStates.waiting_for_panel_username)
-    await message.answer("نام کاربری پنل را بفرستید:")
+    await message.answer(
+        "نام کاربری پنل را بفرستید:",
+        reply_markup=admin_cancel_keyboard(),
+    )
 
 
 @router.message(AdminStates.waiting_for_panel_username)
@@ -175,7 +207,10 @@ async def panel_receive_username(message: Message, state: FSMContext):
         return
     await state.update_data(panel_username=message.text.strip())
     await state.set_state(AdminStates.waiting_for_panel_password)
-    await message.answer("رمز عبور پنل را بفرستید:")
+    await message.answer(
+        "رمز عبور پنل را بفرستید:",
+        reply_markup=admin_cancel_keyboard(),
+    )
 
 
 @router.message(AdminStates.waiting_for_panel_password)
@@ -215,6 +250,7 @@ async def panel_receive_password(message: Message, state: FSMContext):
                     "آدرس پایه Subscription را دستی بفرستید:\n"
                     "مثال: `https://example.com:2096/sub/`",
                     parse_mode="Markdown",
+                    reply_markup=admin_cancel_keyboard(),
                 )
                 return
             summary = {
