@@ -119,13 +119,41 @@ async def provision_subscription_for_order(
             existing_client = await client.get_client(email)
             client_data = (existing_client or {}).get("client") or {}
 
-            if existing_account and client_data:
+            # Always stack onto an existing panel client (same Telegram email).
+            # Replacing quota on a second "new" purchase wiped remaining traffic.
+            if client_data:
                 current_expiry = int(client_data.get("expiryTime") or 0)
                 expiry_ms = max(now_ms, current_expiry) + add_ms
                 total_bytes = int(client_data.get("totalGB") or 0) + add_bytes
+                # #region agent log
+                from app.utils.debug_ndjson import agent_log
+
+                agent_log(
+                    "D",
+                    "xui_provisioning.py:provision",
+                    "extending existing panel client",
+                    {
+                        "order_id": order.id,
+                        "is_renewal": bool(existing_account),
+                        "add_gb": order.traffic_gb,
+                    },
+                    run_id="post-fix",
+                )
+                # #endregion
             else:
                 expiry_ms = now_ms + add_ms
                 total_bytes = add_bytes
+                # #region agent log
+                from app.utils.debug_ndjson import agent_log
+
+                agent_log(
+                    "D",
+                    "xui_provisioning.py:provision",
+                    "creating fresh panel client",
+                    {"order_id": order.id},
+                    run_id="post-fix",
+                )
+                # #endregion
 
             detail = await client.upsert_client(
                 email=email,

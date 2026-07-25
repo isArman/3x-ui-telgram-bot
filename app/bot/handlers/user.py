@@ -207,6 +207,24 @@ async def send_card_payment_instructions(
         card_number, card_holder = await get_card_details(session)
 
     if not card_number or not card_holder:
+        # #region agent log
+        from app.utils.debug_ndjson import agent_log
+
+        agent_log(
+            "C",
+            "user.py:send_card_payment_instructions",
+            "card missing after possible wallet debit",
+            {
+                "user_id": user_id,
+                "order_id": order.id,
+                "wallet_amount": wallet_amount,
+                "order_wallet_debit": int(order.wallet_debit or 0),
+            },
+            run_id="post-fix",
+        )
+        # #endregion
+        if int(order.wallet_debit or 0) > 0 or wallet_amount > 0:
+            await refund_wallet_on_cancel(order.id, user_id)
         await bot.send_message(
             chat_id=user_id,
             text=(
@@ -394,6 +412,7 @@ async def cmd_start(message: Message, state: FSMContext):
 @router.message(F.text == BTN_REFERRAL)
 async def show_referral(message: Message, state: FSMContext):
     """Show user's referral code and invite link."""
+    await abandon_current_order_if_any(state, message.from_user.id)
     await state.clear()
     async with AsyncSessionLocal() as session:
         user, _ = await get_or_create_user(session, message.from_user)
@@ -429,6 +448,7 @@ async def show_referral(message: Message, state: FSMContext):
 @router.message(F.text == BTN_BUY_PLAN)
 async def show_plans(message: Message, state: FSMContext):
     """Show available plans"""
+    await abandon_current_order_if_any(state, message.from_user.id)
     await state.clear()
     async with AsyncSessionLocal() as session:
         plans = await list_active_plans(session)
@@ -452,6 +472,7 @@ async def select_plan(callback: CallbackQuery, state: FSMContext):
             session, callback.from_user, plan["price"]
         )
 
+    await abandon_current_order_if_any(state, callback.from_user.id)
     await state.clear()
     await state.update_data(
         plan_id=plan_id,
@@ -481,6 +502,7 @@ async def select_plan(callback: CallbackQuery, state: FSMContext):
 async def custom_plan_start(message: Message, state: FSMContext):
     """Start custom plan flow"""
     # Clear any leftover plan_id from a previously selected ready-made plan
+    await abandon_current_order_if_any(state, message.from_user.id)
     await state.clear()
     await state.set_state(CustomPlanStates.waiting_for_days)
     await message.answer(
@@ -1040,6 +1062,7 @@ async def receive_receipt_invalid(message: Message):
 @router.message(F.text == BTN_MY_ORDERS)
 async def my_orders(message: Message, state: FSMContext):
     """Show user orders"""
+    await abandon_current_order_if_any(state, message.from_user.id)
     await state.clear()
     async with AsyncSessionLocal() as session:
         result = await session.execute(
@@ -1061,12 +1084,18 @@ async def my_orders(message: Message, state: FSMContext):
         status_map = ORDER_STATUS_LABELS
         
         for order in orders:
+            discount_tag = ""
+            if order.referral_discount_applied and order.original_price:
+                discount_tag = (
+                    f" (تخفیف معرفی از {order.original_price:,})"
+                )
             text += get_text(
                 "order_status",
                 order_id=order.id,
                 days=order.days,
                 traffic=order.traffic_gb,
                 price=order.price,
+                discount_tag=discount_tag,
                 status=status_map.get(order.status, order.status),
                 created_at=order.created_at.strftime("%Y-%m-%d %H:%M")
             ) + "\n"
@@ -1134,6 +1163,7 @@ async def send_accounts_list(event: Message | CallbackQuery) -> None:
 @router.message(F.text == BTN_MY_ACCOUNTS)
 async def my_accounts(message: Message, state: FSMContext):
     """Show user's VPN accounts"""
+    await abandon_current_order_if_any(state, message.from_user.id)
     await state.clear()
     try:
         await send_accounts_list(message)

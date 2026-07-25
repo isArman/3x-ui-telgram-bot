@@ -580,12 +580,51 @@ async def _credit_topup(
     topup: WalletTopUp,
     credited_amount: int,
     admin_id: int,
-) -> int:
-    topup.credited_amount = credited_amount
-    topup.status = "approved"
-    topup.reviewed_at = datetime.utcnow()
-    topup.reviewed_by = admin_id
-    return await credit_balance(session, topup.user_id, credited_amount)
+) -> int | None:
+    """
+    Atomically claim a pending top-up and credit the user.
+    Returns new balance, or None if already processed by another admin.
+    """
+    from sqlalchemy import update
+
+    from app.utils.debug_ndjson import agent_log
+
+    result = await session.execute(
+        update(WalletTopUp)
+        .where(
+            WalletTopUp.id == topup.id,
+            WalletTopUp.status == "pending",
+        )
+        .values(
+            credited_amount=credited_amount,
+            status="approved",
+            reviewed_at=datetime.utcnow(),
+            reviewed_by=admin_id,
+        )
+    )
+    if result.rowcount != 1:
+        # #region agent log
+        agent_log(
+            "E",
+            "admin.py:_credit_topup",
+            "topup claim lost race",
+            {"topup_id": topup.id},
+            run_id="post-fix",
+        )
+        # #endregion
+        return None
+
+    balance = await credit_balance(session, topup.user_id, credited_amount)
+    # #region agent log
+    agent_log(
+        "E",
+        "admin.py:_credit_topup",
+        "topup claimed and credited",
+        {"topup_id": topup.id, "amount": credited_amount, "balance": balance},
+        run_id="post-fix",
+    )
+    # #endregion
+    return balance
 
 
 @router.callback_query(F.data.startswith("approve_topup:"))
@@ -612,6 +651,10 @@ async def approve_topup(callback: CallbackQuery):
 
         amount = topup.requested_amount
         balance = await _credit_topup(session, topup, amount, callback.from_user.id)
+        if balance is None:
+            await session.rollback()
+            await callback.answer("درخواست یافت نشد یا قبلاً بررسی شده!", show_alert=True)
+            return
         await session.commit()
 
         try:
@@ -712,6 +755,11 @@ async def manual_topup_amount(message: Message, state: FSMContext):
 
         requested = topup.requested_amount
         balance = await _credit_topup(session, topup, amount, message.from_user.id)
+        if balance is None:
+            await session.rollback()
+            await message.answer("درخواست یافت نشد یا قبلاً بررسی شده!")
+            await state.clear()
+            return
         await session.commit()
 
         try:

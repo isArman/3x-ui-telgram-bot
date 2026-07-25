@@ -1,9 +1,10 @@
 """Wallet balance credit/debit helpers."""
 
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import User
+from app.utils.debug_ndjson import agent_log
 
 
 class InsufficientBalanceError(Exception):
@@ -23,32 +24,58 @@ async def credit_balance(session: AsyncSession, user_id: int, amount: int) -> in
     if amount <= 0:
         raise ValueError("credit amount must be positive")
 
-    result = await session.execute(select(User).where(User.id == user_id))
-    user = result.scalar_one_or_none()
-    if not user:
+    result = await session.execute(
+        update(User)
+        .where(User.id == user_id)
+        .values(balance=func.coalesce(User.balance, 0) + amount)
+        .returning(User.balance)
+    )
+    row = result.first()
+    if row is None:
         raise ValueError(f"user {user_id} not found")
-
-    user.balance = int(user.balance or 0) + amount
     await session.flush()
-    return user.balance
+    return int(row[0])
 
 
 async def debit_balance(session: AsyncSession, user_id: int, amount: int) -> int:
-    """Subtract amount from user balance. Returns new balance."""
+    """Subtract amount from user balance atomically. Returns new balance."""
     if amount <= 0:
         raise ValueError("debit amount must be positive")
 
-    result = await session.execute(select(User).where(User.id == user_id))
-    user = result.scalar_one_or_none()
-    if not user:
-        raise ValueError(f"user {user_id} not found")
-
-    current = int(user.balance or 0)
-    if current < amount:
+    result = await session.execute(
+        update(User)
+        .where(User.id == user_id, func.coalesce(User.balance, 0) >= amount)
+        .values(balance=func.coalesce(User.balance, 0) - amount)
+        .returning(User.balance)
+    )
+    row = result.first()
+    if row is None:
+        # #region agent log
+        agent_log(
+            "B",
+            "wallet.py:debit_balance",
+            "atomic debit rejected",
+            {"user_id": user_id, "amount": amount},
+            run_id="post-fix",
+        )
+        # #endregion
+        exists = await session.execute(select(User.id).where(User.id == user_id))
+        if exists.scalar_one_or_none() is None:
+            raise ValueError(f"user {user_id} not found")
+        current = await get_balance(session, user_id)
         raise InsufficientBalanceError(
             f"balance {current} is less than debit {amount}"
         )
 
-    user.balance = current - amount
+    new_balance = int(row[0])
     await session.flush()
-    return user.balance
+    # #region agent log
+    agent_log(
+        "B",
+        "wallet.py:debit_balance",
+        "atomic debit ok",
+        {"user_id": user_id, "amount": amount, "new_balance": new_balance},
+        run_id="post-fix",
+    )
+    # #endregion
+    return new_balance

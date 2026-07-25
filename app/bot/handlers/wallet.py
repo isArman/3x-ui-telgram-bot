@@ -23,19 +23,19 @@ from app.bot.keyboards.user import (
 from app.bot.menu_dispatch import dispatch_main_menu
 from app.bot.states import TopUpStates, WalletStates
 from app.config.texts import get_text
+from app.config.settings import settings
 from app.database.models import WalletTopUp
 from app.database.session import AsyncSessionLocal
 from app.services.users import get_or_create_user
 from app.services.wallet import get_balance
 from app.services.bot_settings import get_card_details
+from app.utils.debug_ndjson import agent_log
 from app.utils.logger import logger
 
 router = Router()
 
 
 def user_main_menu(user_id: int):
-    from app.config.settings import settings
-
     return main_menu_keyboard(is_admin=user_id in settings.ADMIN_IDS)
 
 
@@ -62,6 +62,9 @@ async def topup_menu_interrupt(message: Message, state: FSMContext):
 @router.message(F.text == BTN_WALLET)
 async def show_wallet(message: Message, state: FSMContext):
     """Show wallet balance and top-up option."""
+    from app.bot.handlers.user import abandon_current_order_if_any
+
+    await abandon_current_order_if_any(state, message.from_user.id)
     await state.clear()
     async with AsyncSessionLocal() as session:
         await get_or_create_user(session, message.from_user)
@@ -171,6 +174,21 @@ async def confirm_topup(callback: CallbackQuery, state: FSMContext):
     amount = int(amount)
 
     async with AsyncSessionLocal() as session:
+        card_number, card_holder = await get_card_details(session)
+        if not card_number or not card_holder:
+            await callback.message.delete()
+            await callback.bot.send_message(
+                chat_id=callback.from_user.id,
+                text=(
+                    "❌ اطلاعات کارت بانکی هنوز توسط ادمین تنظیم نشده است.\n"
+                    "لطفاً بعداً دوباره تلاش کنید."
+                ),
+                reply_markup=user_main_menu(callback.from_user.id),
+            )
+            await state.clear()
+            await callback.answer()
+            return
+
         await get_or_create_user(session, callback.from_user)
         topup = WalletTopUp(
             user_id=callback.from_user.id,
@@ -180,21 +198,6 @@ async def confirm_topup(callback: CallbackQuery, state: FSMContext):
         session.add(topup)
         await session.commit()
         await session.refresh(topup)
-        card_number, card_holder = await get_card_details(session)
-
-    if not card_number or not card_holder:
-        await callback.message.delete()
-        await callback.bot.send_message(
-            chat_id=callback.from_user.id,
-            text=(
-                "❌ اطلاعات کارت بانکی هنوز توسط ادمین تنظیم نشده است.\n"
-                "لطفاً بعداً دوباره تلاش کنید."
-            ),
-            reply_markup=user_main_menu(callback.from_user.id),
-        )
-        await state.clear()
-        await callback.answer()
-        return
 
     await callback.message.delete()
     await callback.bot.send_message(
@@ -296,6 +299,15 @@ async def topup_receive_receipt(message: Message, state: FSMContext):
                         topup.id, topup.requested_amount
                     ),
                 )
+                # #region agent log
+                agent_log(
+                    "A",
+                    "wallet.py:topup_receive_receipt",
+                    "admin notified for topup",
+                    {"admin_id": admin_id, "topup_id": topup.id},
+                    run_id="post-fix",
+                )
+                # #endregion
             except Exception as exc:
                 logger.warning(
                     "Failed to notify admin %s about topup %s: %s",
@@ -303,6 +315,19 @@ async def topup_receive_receipt(message: Message, state: FSMContext):
                     topup.id,
                     exc,
                 )
+                # #region agent log
+                agent_log(
+                    "A",
+                    "wallet.py:topup_receive_receipt",
+                    "admin notify failed",
+                    {
+                        "admin_id": admin_id,
+                        "topup_id": topup.id,
+                        "error": type(exc).__name__,
+                    },
+                    run_id="post-fix",
+                )
+                # #endregion
 
     await state.clear()
 

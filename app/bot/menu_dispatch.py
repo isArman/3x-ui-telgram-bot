@@ -23,6 +23,9 @@ async def dispatch_main_menu(message: Message, state: FSMContext) -> bool:
     if text not in MAIN_MENU_BUTTONS:
         return False
 
+    from app.bot.handlers.user import abandon_current_order_if_any
+
+    await abandon_current_order_if_any(state, message.from_user.id)
     await state.clear()
 
     if text == BTN_BUY_PLAN:
