@@ -852,6 +852,14 @@ async def wallet_pay_menu_interrupt(message: Message, state: FSMContext):
     from app.bot.menu_dispatch import dispatch_main_menu
 
     await abandon_current_order_if_any(state, message.from_user.id)
+    # BACK/CANCEL are not main-menu actions; leave the wallet-pay step cleanly.
+    if message.text in FLOW_NAV_BUTTONS:
+        await state.clear()
+        await message.answer(
+            get_text("start"),
+            reply_markup=user_main_menu(message.from_user.id),
+        )
+        return
     await dispatch_main_menu(message, state)
 
 

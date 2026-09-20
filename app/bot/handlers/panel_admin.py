@@ -284,7 +284,17 @@ async def panel_receive_password(message: Message, state: FSMContext):
         "از منوی «🔗 پنل 3x-ui» → «📡 بروزرسانی Inboundها» inboundها را انتخاب کنید.\n"
         "سپس حالت ارسال را روی «خودکار» بگذارید.",
         parse_mode="Markdown",
+        reply_markup=main_menu_keyboard(
+            is_admin=message.from_user.id in settings.ADMIN_IDS
+        ),
     )
+    async with AsyncSessionLocal() as session:
+        ps = await get_panel_settings(session)
+        text = await _panel_status_text(session)
+        await message.answer(
+            text,
+            reply_markup=panel_menu_keyboard(ps.provisioning_mode, ps.is_verified),
+        )
 
 
 @router.message(AdminStates.waiting_for_subscription_base_url)
@@ -304,7 +314,12 @@ async def panel_receive_subscription_base(message: Message, state: FSMContext):
     async with AsyncSessionLocal() as session:
         ps = await get_panel_settings(session)
         if not get_panel_password(ps):
-            await message.answer("❌ ابتدا اتصال پنل را از نو تنظیم کنید.")
+            await message.answer(
+                "❌ ابتدا اتصال پنل را از نو تنظیم کنید.",
+                reply_markup=main_menu_keyboard(
+                    is_admin=message.from_user.id in settings.ADMIN_IDS
+                ),
+            )
             await state.clear()
             return
         ps.subscription_base_url = sub_base
@@ -314,8 +329,18 @@ async def panel_receive_subscription_base(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(
         "✅ آدرس Subscription دستی ذخیره شد.\n\n"
-        "از منوی «🔗 پنل 3x-ui» → «📡 بروزرسانی Inboundها» inboundها را انتخاب کنید."
+        "از منوی «🔗 پنل 3x-ui» → «📡 بروزرسانی Inboundها» inboundها را انتخاب کنید.",
+        reply_markup=main_menu_keyboard(
+            is_admin=message.from_user.id in settings.ADMIN_IDS
+        ),
     )
+    async with AsyncSessionLocal() as session:
+        ps = await get_panel_settings(session)
+        text = await _panel_status_text(session)
+        await message.answer(
+            text,
+            reply_markup=panel_menu_keyboard(ps.provisioning_mode, ps.is_verified),
+        )
 
 
 @router.callback_query(F.data == "admin:panel:test")

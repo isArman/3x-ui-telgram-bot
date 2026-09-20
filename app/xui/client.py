@@ -13,6 +13,10 @@ class XUIError(Exception):
     pass
 
 
+# Concurrent device/IP limit enforced for every subscription (existing + new).
+DEFAULT_CLIENT_LIMIT_IP = 1
+
+
 def prepare_client_update_payload(
     existing_detail: dict[str, Any],
     *,
@@ -20,6 +24,7 @@ def prepare_client_update_payload(
     total_bytes: int,
     expiry_ms: int,
     comment: str,
+    limit_ip: int = DEFAULT_CLIENT_LIMIT_IP,
 ) -> dict[str, Any]:
     """
     Build the JSON body for POST /panel/api/clients/update/:email.
@@ -30,11 +35,11 @@ def prepare_client_update_payload(
     old = dict(existing_detail.get("client") or {})
     payload: dict[str, Any] = {
         "email": email,
-        "enable": True,
+        "enable": bool(old.get("enable", True)),
         "totalGB": total_bytes,
         "expiryTime": expiry_ms,
         "comment": comment,
-        "limitIp": old.get("limitIp", 0),
+        "limitIp": int(limit_ip),
         "tgId": old.get("tgId", 0),
     }
 
@@ -164,6 +169,19 @@ class XUIClient:
             return None
         return data.get("obj")
 
+    async def list_clients(self) -> list[dict[str, Any]]:
+        """Return panel client records from GET /panel/api/clients/list."""
+        assert self._client
+        resp = await self._client.get(self._url("/panel/api/clients/list"))
+        resp.raise_for_status()
+        data = resp.json()
+        if not data.get("success"):
+            raise XUIError(data.get("msg") or "Failed to list clients")
+        obj = data.get("obj") or []
+        if not isinstance(obj, list):
+            raise XUIError("Unexpected clients/list payload")
+        return obj
+
     async def add_client(
         self,
         email: str,
@@ -171,6 +189,8 @@ class XUIClient:
         total_bytes: int,
         expiry_ms: int,
         comment: str,
+        *,
+        limit_ip: int = DEFAULT_CLIENT_LIMIT_IP,
     ) -> dict[str, Any]:
         assert self._client
         token = await self._csrf_token()
@@ -180,7 +200,7 @@ class XUIClient:
                 "enable": True,
                 "totalGB": total_bytes,
                 "expiryTime": expiry_ms,
-                "limitIp": 0,
+                "limitIp": int(limit_ip),
                 "tgId": 0,
                 "comment": comment,
             },
@@ -278,6 +298,8 @@ class XUIClient:
         total_bytes: int,
         expiry_ms: int,
         comment: str,
+        *,
+        limit_ip: int = DEFAULT_CLIENT_LIMIT_IP,
     ) -> dict[str, Any]:
         existing = await self.get_client(email)
         if existing and existing.get("client"):
@@ -287,11 +309,39 @@ class XUIClient:
                 total_bytes=total_bytes,
                 expiry_ms=expiry_ms,
                 comment=comment,
+                limit_ip=limit_ip,
             )
             return await self.update_client(email, client, inbound_ids)
         return await self.add_client(
-            email, inbound_ids, total_bytes, expiry_ms, comment
+            email,
+            inbound_ids,
+            total_bytes,
+            expiry_ms,
+            comment,
+            limit_ip=limit_ip,
         )
+
+    async def enforce_limit_ip(
+        self,
+        email: str,
+        *,
+        limit_ip: int = DEFAULT_CLIENT_LIMIT_IP,
+    ) -> dict[str, Any]:
+        """Set limitIp on an existing client without changing quota/expiry."""
+        detail = await self.get_client(email)
+        if not detail or not detail.get("client"):
+            raise XUIError(f"Client {email} not found")
+        client = detail["client"]
+        payload = prepare_client_update_payload(
+            detail,
+            email=email,
+            total_bytes=int(client.get("totalGB") or 0),
+            expiry_ms=int(client.get("expiryTime") or 0),
+            comment=str(client.get("comment") or ""),
+            limit_ip=limit_ip,
+        )
+        inbound_ids = [int(i) for i in (detail.get("inboundIds") or [])]
+        return await self.update_client(email, payload, inbound_ids)
 
 
 def normalize_panel_url(raw: str) -> str:

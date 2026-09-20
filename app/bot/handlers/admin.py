@@ -6,6 +6,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
 
 from app.bot.auth import is_admin
+from app.bot.nav import is_nav_text
 from app.bot.constants import (
     ADMIN_MENU_TEXT,
     BTN_ADMIN_PANEL,
@@ -214,11 +215,12 @@ async def configs_menu(message: Message):
 
 
 @router.callback_query(F.data == "configs:menu")
-async def configs_menu_callback(callback: CallbackQuery):
+async def configs_menu_callback(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
         await callback.answer("دسترسی ندارید!", show_alert=True)
         return
 
+    await state.clear()
     await callback.message.edit_text(
         CONFIGS_MENU_TEXT,
         reply_markup=configs_menu_keyboard(),
@@ -300,7 +302,7 @@ async def configs_receive_text(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
 
-    if message.text == CANCEL_BUTTON:
+    if is_nav_text(message.text):
         await state.clear()
         await message.answer(
             "افزودن کانفیگ لغو شد.",
@@ -456,7 +458,7 @@ async def receive_subscription(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
 
-    if message.text == CANCEL_BUTTON:
+    if is_nav_text(message.text):
         await state.clear()
         await message.answer(
             "ارسال لینک لغو شد. پرداخت همچنان در انتظار است.",
@@ -714,7 +716,7 @@ async def manual_topup_amount(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
 
-    if message.text == CANCEL_BUTTON:
+    if is_nav_text(message.text):
         await state.clear()
         await message.answer(
             "ثبت مبلغ دستی لغو شد.",

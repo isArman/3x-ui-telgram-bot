@@ -9,7 +9,6 @@ from app.bot.constants import (
     BTN_MY_ORDERS,
     BTN_REFERRAL,
     BTN_WALLET,
-    CANCEL_BUTTON,
     MAIN_MENU_BUTTONS,
 )
 
@@ -56,9 +55,5 @@ async def dispatch_main_menu(message: Message, state: FSMContext) -> bool:
         from app.bot.handlers.admin import admin_menu
 
         await admin_menu(message, state)
-    elif text == CANCEL_BUTTON:
-        from app.bot.handlers.user import user_main_menu
-
-        await message.answer("لغو شد.", reply_markup=user_main_menu(message.from_user.id))
 
     return True

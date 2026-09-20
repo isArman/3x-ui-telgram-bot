@@ -12,6 +12,10 @@ BTN_REFERRAL = "🎁 دعوت دوستان"
 BTN_TOP_UP = "💳 شارژ کیف پول"
 BTN_ADMIN_PANEL = "⚙️ پنل ادمین"
 
+# Main-menu actions only. Do NOT include CANCEL/BACK here: FSM "menu interrupt"
+# handlers match this set first, and would swallow ❌ لغو before real cancel
+# handlers (e.g. admin waiting_for_subscription showed "use cancel" instead of
+# cancelling).
 MAIN_MENU_BUTTONS = frozenset(
     {
         BTN_BUY_PLAN,
@@ -21,13 +25,12 @@ MAIN_MENU_BUTTONS = frozenset(
         BTN_WALLET,
         BTN_REFERRAL,
         BTN_ADMIN_PANEL,
-        CANCEL_BUTTON,
     }
 )
 
 FLOW_NAV_BUTTONS = frozenset({BACK_BUTTON, CANCEL_BUTTON})
 
-PANEL_SETUP_CANCEL_TEXTS = frozenset({CANCEL_BUTTON, "/cancel", "لغو"})
+PANEL_SETUP_CANCEL_TEXTS = frozenset({CANCEL_BUTTON, BACK_BUTTON, "/cancel", "لغو"})
 
 ORDER_STATUS_LABELS = {
     "pending": "در انتظار پرداخت",

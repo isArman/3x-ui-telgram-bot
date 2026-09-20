@@ -29,7 +29,8 @@ def test_prepare_client_update_payload_strips_numeric_db_id():
     assert payload["totalGB"] == 2000
     assert payload["expiryTime"] == 456
     assert payload["comment"] == "test user"
-    assert payload["limitIp"] == 2
+    # Always enforce single-IP policy (do not preserve old limitIp=2).
+    assert payload["limitIp"] == 1
     assert payload["tgId"] == 99
 
 
@@ -51,3 +52,17 @@ def test_prepare_client_update_payload_keeps_string_protocol_id():
     )
 
     assert payload["id"] == "22222222-2222-2222-2222-222222222222"
+    assert payload["limitIp"] == 1
+
+
+def test_prepare_client_update_payload_limit_ip_override():
+    existing = {"client": {"id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "email": "x"}}
+    payload = prepare_client_update_payload(
+        existing,
+        email="x",
+        total_bytes=0,
+        expiry_ms=0,
+        comment="",
+        limit_ip=3,
+    )
+    assert payload["limitIp"] == 3

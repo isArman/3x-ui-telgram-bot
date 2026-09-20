@@ -3,13 +3,13 @@
 from aiogram import F, Router
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
+from aiogram.types import CallbackQuery, Message
 
 from app.bot.auth import is_admin
-from app.bot.constants import ADMIN_MENU_TEXT, CANCEL_BUTTON, MAIN_MENU_BUTTONS
+from app.bot.constants import MAIN_MENU_BUTTONS
+from app.bot.nav import exit_admin_fsm, is_nav_text
 from app.bot.keyboards.admin import (
     admin_cancel_keyboard,
-    admin_menu_keyboard,
     card_settings_keyboard,
     plan_admin_detail_keyboard,
     plan_admin_list_keyboard,
@@ -64,14 +64,7 @@ def _card_text(card_number: str | None, card_holder: str | None) -> str:
 
 
 async def _cancel_shop_edit(message: Message, state: FSMContext) -> None:
-    await state.clear()
-    await message.answer(
-        "لغو شد.",
-        reply_markup=main_menu_keyboard(
-            is_admin=message.from_user.id in settings.ADMIN_IDS
-        ),
-    )
-    await message.answer(ADMIN_MENU_TEXT, reply_markup=admin_menu_keyboard())
+    await exit_admin_fsm(message, state, notice="لغو شد.")
 
 
 @router.message(_SHOP_FSM, F.text.in_(MAIN_MENU_BUTTONS))
@@ -126,7 +119,7 @@ async def admin_card_holder_start(callback: CallbackQuery, state: FSMContext):
 async def admin_card_number_save(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
-    if message.text == CANCEL_BUTTON:
+    if is_nav_text(message.text):
         await _cancel_shop_edit(message, state)
         return
     value = (message.text or "").strip()
@@ -138,7 +131,9 @@ async def admin_card_number_save(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(
         "✅ شماره کارت ذخیره شد.\n\n" + _card_text(row.card_number, row.card_holder),
-        reply_markup=ReplyKeyboardRemove(),
+        reply_markup=main_menu_keyboard(
+            is_admin=message.from_user.id in settings.ADMIN_IDS
+        ),
     )
     await message.answer("منوی کارت:", reply_markup=card_settings_keyboard())
 
@@ -147,7 +142,7 @@ async def admin_card_number_save(message: Message, state: FSMContext):
 async def admin_card_holder_save(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
-    if message.text == CANCEL_BUTTON:
+    if is_nav_text(message.text):
         await _cancel_shop_edit(message, state)
         return
     value = (message.text or "").strip()
@@ -159,7 +154,9 @@ async def admin_card_holder_save(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(
         "✅ نام صاحب کارت ذخیره شد.\n\n" + _card_text(row.card_number, row.card_holder),
-        reply_markup=ReplyKeyboardRemove(),
+        reply_markup=main_menu_keyboard(
+            is_admin=message.from_user.id in settings.ADMIN_IDS
+        ),
     )
     await message.answer("منوی کارت:", reply_markup=card_settings_keyboard())
 
@@ -178,10 +175,11 @@ async def admin_plans_menu(callback: CallbackQuery, state: FSMContext):
 
 
 @router.callback_query(F.data == "admin:plans:list")
-async def admin_plans_list(callback: CallbackQuery):
+async def admin_plans_list(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
         await callback.answer("دسترسی ندارید!", show_alert=True)
         return
+    await state.clear()
     async with AsyncSessionLocal() as session:
         plans = await list_all_plans(session)
     if not plans:
@@ -283,7 +281,7 @@ async def admin_plan_edit_start(callback: CallbackQuery, state: FSMContext):
 async def admin_plan_edit_save(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
-    if message.text == CANCEL_BUTTON:
+    if is_nav_text(message.text):
         await _cancel_shop_edit(message, state)
         return
 
@@ -295,7 +293,12 @@ async def admin_plan_edit_save(message: Message, state: FSMContext):
     async with AsyncSessionLocal() as session:
         plan = await get_plan_row(session, plan_id)
         if not plan:
-            await message.answer("پلن یافت نشد.", reply_markup=ReplyKeyboardRemove())
+            await message.answer(
+                "پلن یافت نشد.",
+                reply_markup=main_menu_keyboard(
+                    is_admin=message.from_user.id in settings.ADMIN_IDS
+                ),
+            )
             await state.clear()
             return
         try:
@@ -330,7 +333,12 @@ async def admin_plan_edit_save(message: Message, state: FSMContext):
         plan = await get_plan_row(session, plan_id)
 
     await state.clear()
-    await message.answer("✅ ذخیره شد.", reply_markup=ReplyKeyboardRemove())
+    await message.answer(
+        "✅ ذخیره شد.",
+        reply_markup=main_menu_keyboard(
+            is_admin=message.from_user.id in settings.ADMIN_IDS
+        ),
+    )
     status = "فعال" if plan.is_active else "غیرفعال"
     await message.answer(
         f"📦 {plan.name}\n\n"
@@ -360,7 +368,7 @@ async def admin_plan_add_start(callback: CallbackQuery, state: FSMContext):
 async def admin_plan_add_id(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
-    if message.text == CANCEL_BUTTON:
+    if is_nav_text(message.text):
         await _cancel_shop_edit(message, state)
         return
     plan_id = (message.text or "").strip().lower().replace(" ", "_")
@@ -380,7 +388,7 @@ async def admin_plan_add_id(message: Message, state: FSMContext):
 async def admin_plan_add_name(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
-    if message.text == CANCEL_BUTTON:
+    if is_nav_text(message.text):
         await _cancel_shop_edit(message, state)
         return
     name = (message.text or "").strip()
@@ -396,7 +404,7 @@ async def admin_plan_add_name(message: Message, state: FSMContext):
 async def admin_plan_add_days(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
-    if message.text == CANCEL_BUTTON:
+    if is_nav_text(message.text):
         await _cancel_shop_edit(message, state)
         return
     try:
@@ -415,7 +423,7 @@ async def admin_plan_add_days(message: Message, state: FSMContext):
 async def admin_plan_add_traffic(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
-    if message.text == CANCEL_BUTTON:
+    if is_nav_text(message.text):
         await _cancel_shop_edit(message, state)
         return
     try:
@@ -434,7 +442,7 @@ async def admin_plan_add_traffic(message: Message, state: FSMContext):
 async def admin_plan_add_price(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
-    if message.text == CANCEL_BUTTON:
+    if is_nav_text(message.text):
         await _cancel_shop_edit(message, state)
         return
     try:
@@ -453,7 +461,7 @@ async def admin_plan_add_price(message: Message, state: FSMContext):
 async def admin_plan_add_description(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
-    if message.text == CANCEL_BUTTON:
+    if is_nav_text(message.text):
         await _cancel_shop_edit(message, state)
         return
     raw = (message.text or "").strip()
@@ -472,7 +480,9 @@ async def admin_plan_add_description(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(
         f"✅ پلن «{plan.name}» اضافه شد.\n💰 {plan.price:,} تومان",
-        reply_markup=ReplyKeyboardRemove(),
+        reply_markup=main_menu_keyboard(
+            is_admin=message.from_user.id in settings.ADMIN_IDS
+        ),
     )
     await message.answer(
         "مدیریت پلن‌ها:",
@@ -528,7 +538,7 @@ async def admin_pricing_gb_start(callback: CallbackQuery, state: FSMContext):
 async def admin_pricing_day_save(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
-    if message.text == CANCEL_BUTTON:
+    if is_nav_text(message.text):
         await _cancel_shop_edit(message, state)
         return
     try:
@@ -543,7 +553,9 @@ async def admin_pricing_day_save(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(
         f"✅ قیمت هر روز: {pricing.per_day:,} تومان",
-        reply_markup=ReplyKeyboardRemove(),
+        reply_markup=main_menu_keyboard(
+            is_admin=message.from_user.id in settings.ADMIN_IDS
+        ),
     )
     await message.answer(
         f"هر روز: {pricing.per_day:,}\nهر گیگ: {pricing.per_gb:,}",
@@ -555,7 +567,7 @@ async def admin_pricing_day_save(message: Message, state: FSMContext):
 async def admin_pricing_gb_save(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
-    if message.text == CANCEL_BUTTON:
+    if is_nav_text(message.text):
         await _cancel_shop_edit(message, state)
         return
     try:
@@ -570,7 +582,9 @@ async def admin_pricing_gb_save(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(
         f"✅ قیمت هر گیگ: {pricing.per_gb:,} تومان",
-        reply_markup=ReplyKeyboardRemove(),
+        reply_markup=main_menu_keyboard(
+            is_admin=message.from_user.id in settings.ADMIN_IDS
+        ),
     )
     await message.answer(
         f"هر روز: {pricing.per_day:,}\nهر گیگ: {pricing.per_gb:,}",

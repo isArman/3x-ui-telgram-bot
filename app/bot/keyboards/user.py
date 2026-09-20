@@ -53,6 +53,7 @@ def confirm_topup_keyboard() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="✅ تایید", callback_data="confirm_topup"),
     )
     builder.row(
+        InlineKeyboardButton(text=BACK_BUTTON, callback_data="back_topup_amount"),
         InlineKeyboardButton(text=CANCEL_BUTTON, callback_data="cancel_topup"),
     )
     return builder.as_markup()
@@ -71,6 +72,9 @@ def wallet_pay_keyboard() -> InlineKeyboardMarkup:
             text="💳 خیر، فقط کارت",
             callback_data="wallet_pay:no",
         ),
+    )
+    builder.row(
+        InlineKeyboardButton(text=CANCEL_BUTTON, callback_data="cancel_order"),
     )
     return builder.as_markup()
 

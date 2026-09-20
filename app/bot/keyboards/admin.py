@@ -6,13 +6,16 @@ from aiogram.types import (
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
-from app.bot.constants import CANCEL_BUTTON
+from app.bot.constants import BACK_BUTTON, CANCEL_BUTTON
 
 
 def admin_cancel_keyboard() -> ReplyKeyboardMarkup:
-    """Single cancel button for admin FSM flows."""
+    """Back + Cancel for admin FSM flows (both abort the current step)."""
     builder = ReplyKeyboardBuilder()
-    builder.row(KeyboardButton(text=CANCEL_BUTTON))
+    builder.row(
+        KeyboardButton(text=BACK_BUTTON),
+        KeyboardButton(text=CANCEL_BUTTON),
+    )
     return builder.as_markup(resize_keyboard=True)
 
 

@@ -41,7 +41,7 @@ def user_main_menu(user_id: int):
 
 @router.message(
     WalletStates.home,
-    F.text.in_(MAIN_MENU_BUTTONS - {CANCEL_BUTTON}),
+    F.text.in_(MAIN_MENU_BUTTONS),
 )
 @router.message(
     TopUpStates.waiting_for_amount,
@@ -152,8 +152,12 @@ async def topup_confirm_cancel(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "cancel_topup")
 async def cancel_topup(callback: CallbackQuery, state: FSMContext):
+    await _cancel_pending_topup(state, callback.from_user.id)
     await state.clear()
-    await callback.message.delete()
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
     await callback.bot.send_message(
         chat_id=callback.from_user.id,
         text=get_text("operation_cancelled"),
@@ -218,21 +222,61 @@ async def confirm_topup(callback: CallbackQuery, state: FSMContext):
 
 
 @router.message(TopUpStates.waiting_for_receipt, F.text == BACK_BUTTON)
-@router.message(TopUpStates.waiting_for_receipt, F.text == CANCEL_BUTTON)
 async def topup_receipt_back(message: Message, state: FSMContext):
-    data = await state.get_data()
-    topup_id = data.get("topup_id")
+    await _cancel_pending_topup(state, message.from_user.id)
+    await state.clear()
+    await show_wallet(message, state)
+
+
+@router.message(TopUpStates.waiting_for_receipt, F.text == CANCEL_BUTTON)
+async def topup_receipt_cancel(message: Message, state: FSMContext):
+    topup_id = await _cancel_pending_topup(state, message.from_user.id)
     await state.clear()
     note = ""
     if topup_id:
-        note = (
-            f"\n\n🔢 درخواست #{topup_id} همچنان ثبت است. "
-            "برای ارسال رسید دوباره «کیف پول من» را باز کنید."
-        )
+        note = f"\n\n🔢 درخواست شارژ #{topup_id} لغو شد."
     await message.answer(
-        get_text("start") + note,
+        get_text("operation_cancelled") + note,
         reply_markup=user_main_menu(message.from_user.id),
     )
+
+
+async def _cancel_pending_topup(state: FSMContext, user_id: int) -> int | None:
+    """Reject a pending top-up created in this FSM (if any). Returns topup id."""
+    data = await state.get_data()
+    topup_id = data.get("topup_id")
+    if not topup_id:
+        return None
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(WalletTopUp).where(WalletTopUp.id == topup_id)
+        )
+        topup = result.scalar_one_or_none()
+        if (
+            topup
+            and topup.user_id == user_id
+            and topup.status == "pending"
+            and not topup.receipt_file_id
+        ):
+            topup.status = "rejected"
+            await session.commit()
+            return int(topup_id)
+    return int(topup_id) if topup_id else None
+
+
+@router.callback_query(F.data == "back_topup_amount")
+async def back_topup_amount(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(TopUpStates.waiting_for_amount)
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    await callback.bot.send_message(
+        chat_id=callback.from_user.id,
+        text=get_text("wallet_topup_ask_amount"),
+        reply_markup=flow_nav_keyboard(),
+    )
+    await callback.answer()
 
 
 @router.message(TopUpStates.waiting_for_receipt, F.photo)
