@@ -283,7 +283,7 @@ async def configs_add_plan(callback: CallbackQuery, state: FSMContext):
     async with AsyncSessionLocal() as session:
         plan = await get_plan(session, plan_id)
     if not plan:
-        await callback.answer("پلن یافت نشد!", show_alert=True)
+        await callback.answer("پلن پیدا نشد.", show_alert=True)
         return
 
     await state.update_data(config_plan_id=plan_id)
@@ -349,7 +349,7 @@ async def configs_receive_text(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("approve_payment:"))
 async def approve_payment(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
-        await callback.answer("شما دسترسی ندارید!", show_alert=True)
+        await callback.answer("شما دسترسی ندارید.", show_alert=True)
         return
 
     payment_id = int(callback.data.split(":")[1])
@@ -359,14 +359,14 @@ async def approve_payment(callback: CallbackQuery, state: FSMContext):
         payment = result.scalar_one_or_none()
 
         if not payment or payment.status != "pending":
-            await callback.answer("پرداخت یافت نشد یا قبلاً بررسی شده!", show_alert=True)
+            await callback.answer("پرداخت پیدا نشد یا قبلاً بررسی شده.", show_alert=True)
             return
 
         result = await session.execute(select(Order).where(Order.id == payment.order_id))
         order = result.scalar_one_or_none()
 
         if not order:
-            await callback.answer("سفارش یافت نشد!", show_alert=True)
+            await callback.answer("سفارش پیدا نشد.", show_alert=True)
             return
 
         plan = await get_plan(session, order.plan_id) if order.plan_id else None
@@ -523,7 +523,7 @@ async def receive_subscription(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("reject_payment:"))
 async def reject_payment(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
-        await callback.answer("شما دسترسی ندارید!", show_alert=True)
+        await callback.answer("شما دسترسی ندارید.", show_alert=True)
         return
 
     payment_id = int(callback.data.split(":")[1])
@@ -533,14 +533,14 @@ async def reject_payment(callback: CallbackQuery):
         payment = result.scalar_one_or_none()
 
         if not payment or payment.status != "pending":
-            await callback.answer("پرداخت یافت نشد!", show_alert=True)
+            await callback.answer("پرداخت پیدا نشد.", show_alert=True)
             return
 
         result = await session.execute(select(Order).where(Order.id == payment.order_id))
         order = result.scalar_one_or_none()
 
         if not order:
-            await callback.answer("سفارش یافت نشد!", show_alert=True)
+            await callback.answer("سفارش پیدا نشد.", show_alert=True)
             return
 
         payment.status = "rejected"
@@ -571,7 +571,7 @@ async def reject_payment(callback: CallbackQuery):
         except Exception:
             pass
 
-        await callback.answer("پرداخت رد شد!", show_alert=True)
+        await callback.answer("پرداخت رد شد.", show_alert=True)
 
 
 # --- Wallet top-up review ---
@@ -620,7 +620,7 @@ async def _credit_topup(
 @router.callback_query(F.data.startswith("approve_topup:"))
 async def approve_topup(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
-        await callback.answer("شما دسترسی ندارید!", show_alert=True)
+        await callback.answer("شما دسترسی ندارید.", show_alert=True)
         return
 
     topup_id = int(callback.data.split(":")[1])
@@ -672,7 +672,7 @@ async def approve_topup(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("manual_topup:"))
 async def manual_topup_start(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
-        await callback.answer("شما دسترسی ندارید!", show_alert=True)
+        await callback.answer("شما دسترسی ندارید.", show_alert=True)
         return
 
     topup_id = int(callback.data.split(":")[1])
@@ -784,7 +784,7 @@ async def manual_topup_amount(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("reject_topup:"))
 async def reject_topup(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
-        await callback.answer("شما دسترسی ندارید!", show_alert=True)
+        await callback.answer("شما دسترسی ندارید.", show_alert=True)
         return
 
     topup_id = int(callback.data.split(":")[1])
@@ -796,7 +796,7 @@ async def reject_topup(callback: CallbackQuery):
         topup = result.scalar_one_or_none()
 
         if not topup or topup.status != "pending":
-            await callback.answer("درخواست یافت نشد!", show_alert=True)
+            await callback.answer("درخواست پیدا نشد.", show_alert=True)
             return
 
         topup.status = "rejected"
@@ -921,7 +921,7 @@ async def admin_dashboard_callback(callback: CallbackQuery):
         await _send_dashboard(callback.bot, callback.message.chat.id)
     except Exception as exc:
         logger.error(f"Error showing dashboard: {exc}")
-        await callback.message.answer("خطا در نمایش داشبورد!")
+        await callback.message.answer("خطا در نمایش داشبورد.")
     await callback.answer()
 
 
@@ -943,7 +943,7 @@ async def show_dashboard(message: Message):
         await _send_dashboard(message.bot, message.chat.id)
     except Exception as exc:
         logger.error(f"Error showing dashboard: {exc}")
-        await message.answer("خطا در نمایش داشبورد!")
+        await message.answer("خطا در نمایش داشبورد.")
 
 
 @router.message(Command("pending"))

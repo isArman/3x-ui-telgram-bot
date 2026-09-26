@@ -210,7 +210,7 @@ async def admin_plan_view(callback: CallbackQuery):
     text = (
         f"{plan.name}\n\n"
         f"`{plan.id}`\n"
-        f"⏱ {plan.days} روز\n"
+        f"{plan.days} روز\n"
         f"{plan.traffic_gb} گیگابایت\n"
         f"{plan.price:,} تومان\n"
         f"{plan.description or '—'}\n"
@@ -239,7 +239,7 @@ async def admin_plan_toggle(callback: CallbackQuery):
         text = (
             f"{plan.name}\n\n"
             f"`{plan.id}`\n"
-            f"⏱ {plan.days} روز\n"
+            f"{plan.days} روز\n"
             f"{plan.traffic_gb} گیگابایت\n"
             f"{plan.price:,} تومان\n"
             f"{plan.description or '—'}\n"

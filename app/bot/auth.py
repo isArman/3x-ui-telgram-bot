@@ -16,7 +16,7 @@ class AdminFilter(BaseFilter):
         return user is not None and is_admin(user.id)
 
 
-async def deny_non_admin_callback(callback: CallbackQuery, text: str = "دسترسی ندارید!") -> None:
+async def deny_non_admin_callback(callback: CallbackQuery, text: str = "دسترسی ندارید.") -> None:
     await callback.answer(text, show_alert=True)
 
 
