@@ -152,6 +152,10 @@ async def refund_order_wallet_debit(session, order: Order) -> int | None:
     StateFilter(AdminStates.waiting_for_topup_amount),
     F.text.in_(MAIN_MENU_BUTTONS),
 )
+@router.message(
+    StateFilter(AdminStates.waiting_for_broadcast_text),
+    F.text.in_(MAIN_MENU_BUTTONS),
+)
 async def admin_fsm_menu_interrupt(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
@@ -982,3 +986,75 @@ async def show_payment_history(message: Message):
                 text += f"{icon} #{payment.id} | {order.price:,} تومان | {payment.created_at:%Y-%m-%d}\n"
 
         await message.answer(text)
+
+
+# --- Broadcast ---
+
+
+async def _send_broadcast_prompt(message: Message, state: FSMContext) -> None:
+    from app.services.broadcast import list_recipient_ids
+
+    async with AsyncSessionLocal() as session:
+        recipients = await list_recipient_ids(session)
+
+    await state.set_state(AdminStates.waiting_for_broadcast_text)
+    await message.answer(
+        f"پیام همگانی\n\n"
+        f"تعداد کاربران: {len(recipients)}\n\n"
+        "متن پیام را بفرستید. همین متن برای همه ارسال می‌شود.\n"
+        f"برای انصراف: «{CANCEL_BUTTON}»",
+        reply_markup=admin_cancel_keyboard(),
+    )
+
+
+@router.callback_query(F.data == "admin:broadcast")
+async def admin_broadcast_start(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("دسترسی ندارید.", show_alert=True)
+        return
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await _send_broadcast_prompt(callback.message, state)
+    await callback.answer()
+
+
+@router.message(Command("broadcast"))
+async def broadcast_command(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await message.answer("شما دسترسی ادمین ندارید.")
+        return
+    await _send_broadcast_prompt(message, state)
+
+
+@router.message(AdminStates.waiting_for_broadcast_text)
+async def admin_broadcast_send(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+
+    if is_nav_text(message.text):
+        await state.clear()
+        await message.answer(
+            "ارسال پیام همگانی لغو شد.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        await show_admin_menu(message)
+        return
+
+    text = (message.text or "").strip()
+    if not text:
+        await message.answer("متن پیام خالی است. یک متن بفرستید.")
+        return
+
+    from app.services.broadcast import broadcast_message
+
+    await state.clear()
+    wait_msg = await message.answer("در حال ارسال…")
+
+    async with AsyncSessionLocal() as session:
+        result = await broadcast_message(message.bot, session, text)
+
+    try:
+        await wait_msg.edit_text(f"ارسال تمام شد.\n\n{result.summary}")
+    except Exception:
+        await message.answer(f"ارسال تمام شد.\n\n{result.summary}")
+
+    await show_admin_menu(message)
