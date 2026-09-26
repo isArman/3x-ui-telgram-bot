@@ -4,7 +4,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import User
-from app.utils.debug_ndjson import agent_log
+from app.utils.logger import logger
 
 
 class InsufficientBalanceError(Exception):
@@ -50,32 +50,20 @@ async def debit_balance(session: AsyncSession, user_id: int, amount: int) -> int
     )
     row = result.first()
     if row is None:
-        # #region agent log
-        agent_log(
-            "B",
-            "wallet.py:debit_balance",
-            "atomic debit rejected",
-            {"user_id": user_id, "amount": amount},
-            run_id="post-fix",
-        )
-        # #endregion
         exists = await session.execute(select(User.id).where(User.id == user_id))
         if exists.scalar_one_or_none() is None:
             raise ValueError(f"user {user_id} not found")
         current = await get_balance(session, user_id)
+        logger.warning(
+            "Rejected wallet debit: user=%s balance=%s amount=%s",
+            user_id,
+            current,
+            amount,
+        )
         raise InsufficientBalanceError(
             f"balance {current} is less than debit {amount}"
         )
 
     new_balance = int(row[0])
     await session.flush()
-    # #region agent log
-    agent_log(
-        "B",
-        "wallet.py:debit_balance",
-        "atomic debit ok",
-        {"user_id": user_id, "amount": amount, "new_balance": new_balance},
-        run_id="post-fix",
-    )
-    # #endregion
     return new_balance

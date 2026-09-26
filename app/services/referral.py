@@ -5,7 +5,7 @@ from __future__ import annotations
 import secrets
 import string
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import Order, User
@@ -188,6 +188,9 @@ async def grant_referral_cashback(
     """
     Credit referrer 20% of original_price once for a discounted first purchase.
     Returns (referrer_id, cashback_amount) or None if not granted.
+
+    The cashback flag is claimed with a conditional UPDATE first, so two
+    concurrent approvals of the same order can never credit the referrer twice.
     """
     if order.referral_cashback_paid:
         return None
@@ -196,7 +199,32 @@ async def grant_referral_cashback(
     if order.renew_vpn_account_id:
         return None
 
-    # Only one cashback ever per referred buyer
+    buyer_result = await session.execute(select(User).where(User.id == order.user_id))
+    buyer = buyer_result.scalar_one_or_none()
+    if not buyer or not buyer.referred_by_user_id:
+        # Nothing to pay; still mark the order so it is never reconsidered.
+        order.referral_cashback_paid = True
+        await session.flush()
+        return None
+
+    base = int(order.original_price if order.original_price is not None else order.price)
+    cashback = base * CASHBACK_PERCENT // 100
+    if cashback < 1:
+        order.referral_cashback_paid = True
+        await session.flush()
+        return None
+
+    # Atomically claim this order's cashback exactly once.
+    claim = await session.execute(
+        update(Order)
+        .where(Order.id == order.id, Order.referral_cashback_paid.is_(False))
+        .values(referral_cashback_paid=True)
+    )
+    if claim.rowcount != 1:
+        order.referral_cashback_paid = True
+        return None
+
+    # Only one cashback ever per referred buyer (across orders).
     prior = await session.execute(
         select(Order.id)
         .where(
@@ -207,19 +235,6 @@ async def grant_referral_cashback(
         .limit(1)
     )
     if prior.scalar_one_or_none() is not None:
-        order.referral_cashback_paid = True
-        await session.flush()
-        return None
-
-    buyer_result = await session.execute(select(User).where(User.id == order.user_id))
-    buyer = buyer_result.scalar_one_or_none()
-    if not buyer or not buyer.referred_by_user_id:
-        return None
-
-    base = int(order.original_price if order.original_price is not None else order.price)
-    cashback = base * CASHBACK_PERCENT // 100
-    if cashback < 1:
-        order.referral_cashback_paid = True
         await session.flush()
         return None
 

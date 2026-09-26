@@ -207,22 +207,6 @@ async def send_card_payment_instructions(
         card_number, card_holder = await get_card_details(session)
 
     if not card_number or not card_holder:
-        # #region agent log
-        from app.utils.debug_ndjson import agent_log
-
-        agent_log(
-            "C",
-            "user.py:send_card_payment_instructions",
-            "card missing after possible wallet debit",
-            {
-                "user_id": user_id,
-                "order_id": order.id,
-                "wallet_amount": wallet_amount,
-                "order_wallet_debit": int(order.wallet_debit or 0),
-            },
-            run_id="post-fix",
-        )
-        # #endregion
         if int(order.wallet_debit or 0) > 0 or wallet_amount > 0:
             await refund_wallet_on_cancel(order.id, user_id)
         await bot.send_message(
@@ -1077,6 +1061,7 @@ async def my_orders(message: Message, state: FSMContext):
             select(Order)
             .where(Order.user_id == message.from_user.id)
             .order_by(Order.created_at.desc())
+            .limit(20)
         )
         orders = result.scalars().all()
         
@@ -1127,6 +1112,7 @@ async def send_accounts_list(event: Message | CallbackQuery) -> None:
             select(VPNAccount)
             .where(VPNAccount.user_id == user_id)
             .order_by(VPNAccount.created_at.desc())
+            .limit(20)
         )
         accounts = result.scalars().all()
 

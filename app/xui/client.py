@@ -24,11 +24,19 @@ _NOT_FOUND_HINTS = (
     "does not exist",
 )
 
+_CSRF_HINTS = ("csrf", "invalid token", "token mismatch", "expired")
+
 
 def _msg_is_not_found(msg: str) -> bool:
     """True when a panel message means "this client does not exist"."""
     lowered = (msg or "").lower()
     return any(hint in lowered for hint in _NOT_FOUND_HINTS)
+
+
+def _msg_is_stale_csrf(msg: str) -> bool:
+    """True when a panel message points at a rejected/expired CSRF token."""
+    lowered = (msg or "").lower()
+    return "csrf" in lowered or any(hint in lowered for hint in _CSRF_HINTS[1:])
 
 
 def prepare_client_update_payload(
@@ -87,6 +95,7 @@ class XUIClient:
         self.password = password
         self.verify_ssl = settings.XUI_VERIFY_SSL if verify_ssl is None else verify_ssl
         self._client: Optional[httpx.AsyncClient] = None
+        self._csrf_token_cache: str = ""
 
     async def __aenter__(self) -> "XUIClient":
         self._client = httpx.AsyncClient(
@@ -101,23 +110,75 @@ class XUIClient:
         if self._client:
             await self._client.aclose()
             self._client = None
+        self._csrf_token_cache = ""
 
     def _url(self, path: str) -> str:
         if not path.startswith("/"):
             path = f"/{path}"
         return f"{self.base_url}{path}"
 
-    async def _csrf_token(self) -> str:
+    async def _csrf_token(self, *, force: bool = False) -> str:
+        """
+        Return a CSRF token for this session, caching it in memory.
+
+        The token stays valid for the life of the login session, so fetching it
+        once and reusing it removes one HTTP round-trip from every later write
+        (add/update/attach/detach/bulkAdjust). Pass force=True to refetch after
+        a request was rejected with a stale token.
+        """
         assert self._client
+        if self._csrf_token_cache and not force:
+            return self._csrf_token_cache
         resp = await self._client.get(self._url("/csrf-token"))
         resp.raise_for_status()
         data = resp.json()
         if not data.get("success"):
             raise XUIError(data.get("msg") or "Failed to get CSRF token")
-        return data["obj"]
+        self._csrf_token_cache = data["obj"]
+        return self._csrf_token_cache
+
+    def _invalidate_csrf(self) -> None:
+        self._csrf_token_cache = ""
+
+    async def _post_panel(
+        self,
+        path: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        error_label: str = "request",
+    ) -> dict[str, Any]:
+        """
+        POST a panel API write and return the whole JSON envelope.
+
+        Reuses the cached CSRF token and, if the panel rejects the request with
+        a stale-token error, refetches the token once and retries the same call.
+        """
+        assert self._client
+        url = self._url(path)
+        for attempt in range(2):
+            token = await self._csrf_token(force=attempt == 1)
+            resp = await self._client.post(
+                url,
+                json=payload,
+                headers={"X-CSRF-Token": token},
+            )
+            if resp.status_code in (401, 403, 419) and attempt == 0:
+                self._invalidate_csrf()
+                continue
+            resp.raise_for_status()
+            data = resp.json()
+            if not data.get("success"):
+                msg = str(data.get("msg") or "")
+                if attempt == 0 and _msg_is_stale_csrf(msg):
+                    self._invalidate_csrf()
+                    continue
+                raise XUIError(msg or f"Failed to {error_label}")
+            return data
+        raise XUIError(f"Failed to {error_label} after CSRF refresh")
 
     async def login(self) -> None:
         assert self._client
+        self._invalidate_csrf()
         await self._client.get(self._url("/"))
         token = await self._csrf_token()
         resp = await self._client.post(
@@ -129,6 +190,9 @@ class XUIClient:
         data = resp.json()
         if not data.get("success"):
             raise XUIError(data.get("msg") or "Login failed")
+        # The authenticated session may issue its own CSRF token; drop the one
+        # minted for the anonymous session so the next write mints a fresh one.
+        self._invalidate_csrf()
 
     async def test_connection(self) -> dict[str, Any]:
         """Login and return a short summary (inbound count + subscription base)."""
@@ -146,15 +210,9 @@ class XUIClient:
 
     async def fetch_settings(self) -> dict[str, Any]:
         assert self._client
-        token = await self._csrf_token()
-        resp = await self._client.post(
-            self._url("/panel/api/setting/all"),
-            headers={"X-CSRF-Token": token},
+        data = await self._post_panel(
+            "/panel/api/setting/all", None, error_label="fetch panel settings"
         )
-        resp.raise_for_status()
-        data = resp.json()
-        if not data.get("success"):
-            raise XUIError(data.get("msg") or "Failed to fetch panel settings")
         return data.get("obj") or {}
 
     async def get_subscription_base_url(self) -> str:
@@ -224,7 +282,6 @@ class XUIClient:
         limit_ip: int = DEFAULT_CLIENT_LIMIT_IP,
     ) -> dict[str, Any]:
         assert self._client
-        token = await self._csrf_token()
         payload = {
             "client": {
                 "email": email,
@@ -237,15 +294,9 @@ class XUIClient:
             },
             "inboundIds": inbound_ids,
         }
-        resp = await self._client.post(
-            self._url("/panel/api/clients/add"),
-            json=payload,
-            headers={"X-CSRF-Token": token},
+        await self._post_panel(
+            "/panel/api/clients/add", payload, error_label="add client"
         )
-        resp.raise_for_status()
-        data = resp.json()
-        if not data.get("success"):
-            raise XUIError(data.get("msg") or "Failed to add client")
         detail = await self.get_client(email)
         if not detail:
             raise XUIError("Client created but could not be fetched")
@@ -268,34 +319,18 @@ class XUIClient:
         extra = sorted(current_ids - desired_ids)
 
         if missing:
-            token = await self._csrf_token()
-            attach_resp = await self._client.post(
-                self._url(f"/panel/api/clients/{email}/attach"),
-                json={"inboundIds": missing},
-                headers={"X-CSRF-Token": token},
+            await self._post_panel(
+                f"/panel/api/clients/{email}/attach",
+                {"inboundIds": missing},
+                error_label=f"attach client {email} to inbounds {missing}",
             )
-            attach_resp.raise_for_status()
-            attach_data = attach_resp.json()
-            if not attach_data.get("success"):
-                raise XUIError(
-                    attach_data.get("msg")
-                    or f"Failed to attach client {email} to inbounds {missing}"
-                )
 
         if extra:
-            token = await self._csrf_token()
-            detach_resp = await self._client.post(
-                self._url(f"/panel/api/clients/{email}/detach"),
-                json={"inboundIds": extra},
-                headers={"X-CSRF-Token": token},
+            await self._post_panel(
+                f"/panel/api/clients/{email}/detach",
+                {"inboundIds": extra},
+                error_label=f"detach client {email} from inbounds {extra}",
             )
-            detach_resp.raise_for_status()
-            detach_data = detach_resp.json()
-            if not detach_data.get("success"):
-                raise XUIError(
-                    detach_data.get("msg")
-                    or f"Failed to detach client {email} from inbounds {extra}"
-                )
 
         detail = await self.get_client(email)
         if not detail:
@@ -309,16 +344,11 @@ class XUIClient:
         inbound_ids: list[int],
     ) -> dict[str, Any]:
         assert self._client
-        token = await self._csrf_token()
-        resp = await self._client.post(
-            self._url(f"/panel/api/clients/update/{email}"),
-            json=client_payload,
-            headers={"X-CSRF-Token": token},
+        await self._post_panel(
+            f"/panel/api/clients/update/{email}",
+            client_payload,
+            error_label="update client",
         )
-        resp.raise_for_status()
-        data = resp.json()
-        if not data.get("success"):
-            raise XUIError(data.get("msg") or "Failed to update client")
 
         return await self.sync_client_inbounds(email, inbound_ids)
 
@@ -353,16 +383,11 @@ class XUIClient:
         }
 
         assert self._client
-        token = await self._csrf_token()
-        resp = await self._client.post(
-            self._url("/panel/api/clients/bulkAdjust"),
-            json=payload,
-            headers={"X-CSRF-Token": token},
+        data = await self._post_panel(
+            "/panel/api/clients/bulkAdjust",
+            payload,
+            error_label="bulk-adjust clients",
         )
-        resp.raise_for_status()
-        data = resp.json()
-        if not data.get("success"):
-            raise XUIError(data.get("msg") or "Failed to bulk-adjust clients")
         obj = data.get("obj") or {}
         if not isinstance(obj, dict):
             raise XUIError("Unexpected bulkAdjust payload")

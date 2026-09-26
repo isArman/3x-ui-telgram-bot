@@ -183,7 +183,7 @@ async def test_bulk_adjust_sends_delta_body(monkeypatch):
             captured["json"] = json
             return _FakeHTTPResponse({"success": True, "obj": {"adjusted": 1}})
 
-    async def _fake_csrf():
+    async def _fake_csrf(*, force: bool = False):
         return "tok"
 
     monkeypatch.setattr(client, "_csrf_token", _fake_csrf)
@@ -208,7 +208,7 @@ async def test_bulk_adjust_raises_on_panel_error(monkeypatch):
         async def post(self, url, json=None, headers=None):
             return _FakeHTTPResponse({"success": False, "msg": "boom"})
 
-    async def _fake_csrf():
+    async def _fake_csrf(*, force: bool = False):
         return "tok"
 
     monkeypatch.setattr(client, "_csrf_token", _fake_csrf)

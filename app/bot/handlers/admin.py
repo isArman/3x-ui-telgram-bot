@@ -589,8 +589,6 @@ async def _credit_topup(
     """
     from sqlalchemy import update
 
-    from app.utils.debug_ndjson import agent_log
-
     result = await session.execute(
         update(WalletTopUp)
         .where(
@@ -605,27 +603,17 @@ async def _credit_topup(
         )
     )
     if result.rowcount != 1:
-        # #region agent log
-        agent_log(
-            "E",
-            "admin.py:_credit_topup",
-            "topup claim lost race",
-            {"topup_id": topup.id},
-            run_id="post-fix",
-        )
-        # #endregion
+        logger.info("Topup %s already processed; claim skipped", topup.id)
         return None
 
     balance = await credit_balance(session, topup.user_id, credited_amount)
-    # #region agent log
-    agent_log(
-        "E",
-        "admin.py:_credit_topup",
-        "topup claimed and credited",
-        {"topup_id": topup.id, "amount": credited_amount, "balance": balance},
-        run_id="post-fix",
+    logger.info(
+        "Topup %s credited %s to user %s (new balance %s)",
+        topup.id,
+        credited_amount,
+        topup.user_id,
+        balance,
     )
-    # #endregion
     return balance
 
 

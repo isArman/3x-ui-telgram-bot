@@ -29,7 +29,6 @@ from app.database.session import AsyncSessionLocal
 from app.services.users import get_or_create_user
 from app.services.wallet import get_balance
 from app.services.bot_settings import get_card_details
-from app.utils.debug_ndjson import agent_log
 from app.utils.logger import logger
 
 router = Router()
@@ -343,15 +342,6 @@ async def topup_receive_receipt(message: Message, state: FSMContext):
                         topup.id, topup.requested_amount
                     ),
                 )
-                # #region agent log
-                agent_log(
-                    "A",
-                    "wallet.py:topup_receive_receipt",
-                    "admin notified for topup",
-                    {"admin_id": admin_id, "topup_id": topup.id},
-                    run_id="post-fix",
-                )
-                # #endregion
             except Exception as exc:
                 logger.warning(
                     "Failed to notify admin %s about topup %s: %s",
@@ -359,19 +349,6 @@ async def topup_receive_receipt(message: Message, state: FSMContext):
                     topup.id,
                     exc,
                 )
-                # #region agent log
-                agent_log(
-                    "A",
-                    "wallet.py:topup_receive_receipt",
-                    "admin notify failed",
-                    {
-                        "admin_id": admin_id,
-                        "topup_id": topup.id,
-                        "error": type(exc).__name__,
-                    },
-                    run_id="post-fix",
-                )
-                # #endregion
 
     await state.clear()
 
