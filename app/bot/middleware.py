@@ -24,7 +24,7 @@ class BlockedUserMiddleware(BaseMiddleware):
             async with AsyncSessionLocal() as session:
                 if await is_user_blocked(session, user.id):
                     if isinstance(event, Message):
-                        await event.answer("⛔ دسترسی شما مسدود شده است.")
+                        await event.answer("دسترسی شما مسدود شده است.")
                     elif isinstance(event, CallbackQuery):
                         await event.answer("دسترسی مسدود", show_alert=True)
                     return None

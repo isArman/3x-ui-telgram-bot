@@ -21,4 +21,4 @@ async def deny_non_admin_callback(callback: CallbackQuery, text: str = "دستر
 
 
 async def deny_non_admin_message(message: Message) -> None:
-    await message.answer("⛔ شما دسترسی ادمین ندارید.")
+    await message.answer("شما دسترسی ادمین ندارید.")

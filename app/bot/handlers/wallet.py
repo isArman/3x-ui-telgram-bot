@@ -183,8 +183,8 @@ async def confirm_topup(callback: CallbackQuery, state: FSMContext):
             await callback.bot.send_message(
                 chat_id=callback.from_user.id,
                 text=(
-                    "❌ اطلاعات کارت بانکی هنوز توسط ادمین تنظیم نشده است.\n"
-                    "لطفاً بعداً دوباره تلاش کنید."
+                    "اطلاعات کارت بانکی هنوز تنظیم نشده است.\n"
+                    "کمی بعد دوباره تلاش کنید."
                 ),
                 reply_markup=user_main_menu(callback.from_user.id),
             )
@@ -233,7 +233,7 @@ async def topup_receipt_cancel(message: Message, state: FSMContext):
     await state.clear()
     note = ""
     if topup_id:
-        note = f"\n\n🔢 درخواست شارژ #{topup_id} لغو شد."
+        note = f"\n\nدرخواست شارژ #{topup_id} لغو شد."
     await message.answer(
         get_text("operation_cancelled") + note,
         reply_markup=user_main_menu(message.from_user.id),

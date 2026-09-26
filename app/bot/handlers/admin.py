@@ -86,18 +86,18 @@ async def _finalize_config_delivery(
     label = plan_name or order.plan_id or "سفارشی"
     preview = config_text if len(config_text) <= 120 else config_text[:120] + "..."
     await callback.message.answer(
-        f"✅ پرداخت تایید شد ({source_label})!\n\n"
-        f"👤 کاربر: {order.user_id}\n"
-        f"📦 پلن: {label}\n"
-        f"🔗 {preview}"
+        f"پرداخت تایید شد ({source_label}).\n\n"
+        f"کاربر: {order.user_id}\n"
+        f"پلن: {label}\n"
+        f"{preview}"
     )
     try:
         await callback.message.edit_caption(
-            caption=(callback.message.caption or "") + f"\n\n✅ تایید ({source_label})"
+            caption=(callback.message.caption or "") + f"\n\nتایید شد ({source_label})"
         )
     except Exception:
         pass
-    await callback.answer("کانفیگ ارسال شد!")
+    await callback.answer("لینک ارسال شد.")
 
 
 async def _finalize_renewal_delivery(
@@ -115,19 +115,19 @@ async def _finalize_renewal_delivery(
 
     label = plan_name or order.plan_id or "سفارشی"
     await callback.message.answer(
-        f"✅ تمدید تایید شد ({source_label})!\n\n"
-        f"👤 کاربر: {order.user_id}\n"
-        f"📦 پلن: {label}\n"
-        f"🆔 اکانت سفارش #{vpn_account.order_id}\n"
-        f"📅 انقضای جدید: {vpn_account.expires_at:%Y-%m-%d}"
+        f"تمدید تایید شد ({source_label}).\n\n"
+        f"کاربر: {order.user_id}\n"
+        f"پلن: {label}\n"
+        f"اکانت سفارش #{vpn_account.order_id}\n"
+        f"انقضای جدید: {vpn_account.expires_at:%Y-%m-%d}"
     )
     try:
         await callback.message.edit_caption(
-            caption=(callback.message.caption or "") + f"\n\n✅ تمدید ({source_label})"
+            caption=(callback.message.caption or "") + f"\n\nتمدید شد ({source_label})"
         )
     except Exception:
         pass
-    await callback.answer("تمدید انجام شد!")
+    await callback.answer("تمدید انجام شد.")
 
 
 async def refund_order_wallet_debit(session, order: Order) -> int | None:
@@ -166,8 +166,8 @@ async def admin_subscription_menu_interrupt(message: Message):
     if not is_admin(message.from_user.id):
         return
     await message.answer(
-        "⚠️ در حال انتظار ارسال لینک subscription هستید.\n"
-        "لطفاً لینک را ارسال کنید یا از دکمه «❌ لغو» برای انصراف استفاده کنید."
+        "در حال انتظار ارسال لینک subscription هستید.\n"
+        "لینک را بفرستید یا از دکمه «لغو» برای انصراف استفاده کنید."
     )
 
 
@@ -175,7 +175,7 @@ async def admin_subscription_menu_interrupt(message: Message):
 @router.message(F.text == BTN_ADMIN_PANEL)
 async def admin_menu(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
-        await message.answer("⛔ شما دسترسی ادمین ندارید.")
+        await message.answer("شما دسترسی ادمین ندارید.")
         return
     await state.clear()
     await show_admin_menu(message)
@@ -184,7 +184,7 @@ async def admin_menu(message: Message, state: FSMContext):
 @router.callback_query(F.data == "admin:menu")
 async def admin_menu_callback(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
-        await callback.answer("دسترسی ندارید!", show_alert=True)
+        await callback.answer("دسترسی ندارید.", show_alert=True)
         return
     await state.clear()
     await callback.message.edit_text(
@@ -197,7 +197,7 @@ async def admin_menu_callback(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "admin:configs")
 async def admin_configs_callback(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
-        await callback.answer("دسترسی ندارید!", show_alert=True)
+        await callback.answer("دسترسی ندارید.", show_alert=True)
         return
     await callback.message.edit_text(
         CONFIGS_MENU_TEXT,
@@ -209,7 +209,7 @@ async def admin_configs_callback(callback: CallbackQuery):
 @router.message(Command("configs"))
 async def configs_menu(message: Message):
     if not is_admin(message.from_user.id):
-        await message.answer("⛔ شما دسترسی ادمین ندارید.")
+        await message.answer("شما دسترسی ادمین ندارید.")
         return
     await show_configs_menu(message)
 
@@ -217,7 +217,7 @@ async def configs_menu(message: Message):
 @router.callback_query(F.data == "configs:menu")
 async def configs_menu_callback(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
-        await callback.answer("دسترسی ندارید!", show_alert=True)
+        await callback.answer("دسترسی ندارید.", show_alert=True)
         return
 
     await state.clear()
@@ -231,12 +231,12 @@ async def configs_menu_callback(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "configs:stock")
 async def configs_stock(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
-        await callback.answer("دسترسی ندارید!", show_alert=True)
+        await callback.answer("دسترسی ندارید.", show_alert=True)
         return
 
     async with AsyncSessionLocal() as session:
         plans = await list_all_plans(session)
-        lines = ["📦 موجودی کانفیگ هر پلن:\n"]
+        lines = ["موجودی کانفیگ هر پلن:\n"]
         for plan in plans:
             available = await count_available(session, plan.id)
             total_result = await session.execute(
@@ -257,13 +257,13 @@ async def configs_stock(callback: CallbackQuery):
 @router.callback_query(F.data == "configs:add")
 async def configs_add_start(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
-        await callback.answer("دسترسی ندارید!", show_alert=True)
+        await callback.answer("دسترسی ندارید.", show_alert=True)
         return
 
     async with AsyncSessionLocal() as session:
         plans = await list_active_plans(session)
     if not plans:
-        await callback.message.answer("ابتدا از «مدیریت پلن‌ها» یک پلن فعال بسازید.")
+        await callback.message.answer("اول از «مدیریت پلن‌ها» یک پلن فعال بسازید.")
         await callback.answer()
         return
     await callback.message.answer(
@@ -276,7 +276,7 @@ async def configs_add_start(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("configs:add_plan:"))
 async def configs_add_plan(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
-        await callback.answer("دسترسی ندارید!", show_alert=True)
+        await callback.answer("دسترسی ندارید.", show_alert=True)
         return
 
     plan_id = callback.data.split(":")[2]
@@ -289,8 +289,8 @@ async def configs_add_plan(callback: CallbackQuery, state: FSMContext):
     await state.update_data(config_plan_id=plan_id)
     await state.set_state(AdminStates.waiting_for_config_text)
     await callback.message.answer(
-        f"➕ افزودن کانفیگ برای «{plan['name']}»\n\n"
-        "لینک subscription یا کانفیگ کامل (vless:// ...) را ارسال کنید:\n"
+        f"افزودن کانفیگ برای «{plan['name']}»\n\n"
+        "لینک subscription یا کانفیگ کامل (vless:// ...) را بفرستید:\n"
         f"برای لغو: «{CANCEL_BUTTON}»",
         reply_markup=admin_cancel_keyboard(),
     )
@@ -312,13 +312,13 @@ async def configs_receive_text(message: Message, state: FSMContext):
         return
 
     if not message.text or not message.text.strip():
-        await message.answer("❌ لطفاً لینک/متن کانفیگ را به صورت متن ارسال کنید.")
+        await message.answer("لینک یا متن کانفیگ را به صورت متن بفرستید.")
         return
 
     config_text = message.text.strip()
     if not is_valid_config_text(config_text):
         await message.answer(
-            "❌ فرمت کانفیگ نامعتبر است. لینک http(s):// یا vless:// و مشابه بفرستید."
+            "فرمت کانفیگ نامعتبر است. لینک http(s):// یا vless:// بفرستید."
         )
         return
 
@@ -327,7 +327,7 @@ async def configs_receive_text(message: Message, state: FSMContext):
     async with AsyncSessionLocal() as session:
         plan = await get_plan(session, plan_id)
         if not plan:
-            await message.answer("❌ پلن یافت نشد.")
+            await message.answer("پلن پیدا نشد.")
             await state.clear()
             return
 
@@ -335,8 +335,8 @@ async def configs_receive_text(message: Message, state: FSMContext):
         available = await count_available(session, plan_id)
 
     await message.answer(
-        f"✅ کانفیگ #{entry.id} به «{plan['name']}» اضافه شد.\n"
-        f"📦 موجودی آزاد: {available}",
+        f"کانفیگ #{entry.id} به «{plan['name']}» اضافه شد.\n"
+        f"موجودی آزاد: {available}",
         reply_markup=ReplyKeyboardRemove(),
     )
     await state.clear()
@@ -427,13 +427,13 @@ async def approve_payment(callback: CallbackQuery, state: FSMContext):
         # needs_manual
         if order.plan_id and plan_name:
             await callback.message.answer(
-                f"⚠️ ساخت خودکار ناموفق و موجودی پلن «{plan_name}» خالی است.\n"
-                f"لینک را دستی ارسال کنید یا از /configs کانفیگ اضافه کنید."
+                f"ساخت خودکار ناموفق بود و موجودی پلن «{plan_name}» خالی است.\n"
+                f"لینک را دستی بفرستید یا از /configs کانفیگ اضافه کنید."
             )
         elif (await get_panel_settings(session)).provisioning_mode == PROVISIONING_AUTO:
             await callback.message.answer(
-                "⚠️ ساخت خودکار در 3x-ui ناموفق بود.\n"
-                "لینک subscription را دستی ارسال کنید."
+                "ساخت خودکار در 3x-ui ناموفق بود.\n"
+                "لینک subscription را دستی بفرستید."
             )
 
         await state.update_data(payment_id=payment_id, order_id=order.id)
@@ -441,13 +441,13 @@ async def approve_payment(callback: CallbackQuery, state: FSMContext):
 
         plan_note = ""
         if order.plan_id:
-            plan_note = f"\n📦 پلن: {plan_name or order.plan_id}"
+            plan_note = f"\nپلن: {plan_name or order.plan_id}"
 
         await callback.message.answer(
-            f"⏳ پرداخت در انتظار ارسال لینک{plan_note}\n\n"
-            f"👤 کاربر: {order.user_id}\n"
-            f"⏱ {order.days} روز | 📊 {order.traffic_gb} GB\n\n"
-            "لطفاً لینک subscription را ارسال کنید:",
+            f"پرداخت در انتظار ارسال لینک{plan_note}\n\n"
+            f"کاربر: {order.user_id}\n"
+            f"{order.days} روز | {order.traffic_gb} GB\n\n"
+            "لینک subscription را بفرستید:",
             reply_markup=admin_cancel_keyboard(),
         )
         await callback.answer()
@@ -468,13 +468,13 @@ async def receive_subscription(message: Message, state: FSMContext):
         return
 
     if not message.text or not message.text.strip():
-        await message.answer("❌ لطفاً لینک/کانفیگ را به صورت متن ارسال کنید.")
+        await message.answer("لینک یا کانفیگ را به صورت متن بفرستید.")
         return
 
     config_text = message.text.strip()
     if not is_valid_config_text(config_text):
         await message.answer(
-            "❌ فرمت کانفیگ نامعتبر است. لینک http(s):// یا vless:// و مشابه بفرستید."
+            "فرمت کانفیگ نامعتبر است. لینک http(s):// یا vless:// بفرستید."
         )
         return
 
@@ -489,12 +489,12 @@ async def receive_subscription(message: Message, state: FSMContext):
         order = result.scalar_one_or_none()
 
         if not payment or not order:
-            await message.answer("❌ خطا: سفارش یا پرداخت یافت نشد!")
+            await message.answer("خطا: سفارش یا پرداخت پیدا نشد.")
             await state.clear()
             return
 
         if payment.status != "pending":
-            await message.answer("❌ این پرداخت قبلاً بررسی شده است.")
+            await message.answer("این پرداخت قبلاً بررسی شده است.")
             await state.clear()
             return
 
@@ -509,13 +509,13 @@ async def receive_subscription(message: Message, state: FSMContext):
         try:
             await send_config_to_user(message.bot, order.user_id, config_text)
             await message.answer(
-                f"✅ کانفیگ ارسال شد!\n👤 کاربر: {order.user_id}\n🔗 {config_text}",
+                f"لینک ارسال شد.\nکاربر: {order.user_id}\n{config_text}",
                 reply_markup=ReplyKeyboardRemove(),
             )
             await show_admin_menu(message)
         except Exception as exc:
             logger.error(f"Failed to notify user: {exc}")
-            await message.answer(f"⚠️ خطا در ارسال به کاربر: {exc}")
+            await message.answer(f"خطا در ارسال به کاربر: {exc}")
 
     await state.clear()
 
@@ -566,7 +566,7 @@ async def reject_payment(callback: CallbackQuery):
 
         try:
             await callback.message.edit_caption(
-                caption=(callback.message.caption or "") + "\n\n❌ رد شد"
+                caption=(callback.message.caption or "") + "\n\nرد شد"
             )
         except Exception:
             pass
@@ -632,18 +632,18 @@ async def approve_topup(callback: CallbackQuery):
         topup = result.scalar_one_or_none()
 
         if not topup or topup.status != "pending":
-            await callback.answer("درخواست یافت نشد یا قبلاً بررسی شده!", show_alert=True)
+            await callback.answer("درخواست پیدا نشد یا قبلاً بررسی شده.", show_alert=True)
             return
 
         if not topup.receipt_file_id:
-            await callback.answer("هنوز رسیدی دریافت نشده است!", show_alert=True)
+            await callback.answer("هنوز رسیدی دریافت نشده است.", show_alert=True)
             return
 
         amount = topup.requested_amount
         balance = await _credit_topup(session, topup, amount, callback.from_user.id)
         if balance is None:
             await session.rollback()
-            await callback.answer("درخواست یافت نشد یا قبلاً بررسی شده!", show_alert=True)
+            await callback.answer("درخواست پیدا نشد یا قبلاً بررسی شده.", show_alert=True)
             return
         await session.commit()
 
@@ -658,7 +658,7 @@ async def approve_topup(callback: CallbackQuery):
         try:
             await callback.message.edit_caption(
                 caption=(callback.message.caption or "")
-                + f"\n\n✅ تایید مبلغ درخواستی ({amount:,})"
+                + f"\n\nتایید مبلغ درخواستی ({amount:,})"
             )
         except Exception:
             pass
@@ -666,7 +666,7 @@ async def approve_topup(callback: CallbackQuery):
         await callback.message.answer(
             get_text("admin_topup_credited_requested", amount=amount)
         )
-        await callback.answer("شارژ تایید شد!")
+        await callback.answer("شارژ تایید شد.")
 
 
 @router.callback_query(F.data.startswith("manual_topup:"))
@@ -684,7 +684,7 @@ async def manual_topup_start(callback: CallbackQuery, state: FSMContext):
         topup = result.scalar_one_or_none()
 
         if not topup or topup.status != "pending":
-            await callback.answer("درخواست یافت نشد یا قبلاً بررسی شده!", show_alert=True)
+            await callback.answer("درخواست پیدا نشد یا قبلاً بررسی شده.", show_alert=True)
             return
 
     await state.update_data(manual_topup_id=topup_id)
@@ -739,7 +739,7 @@ async def manual_topup_amount(message: Message, state: FSMContext):
         topup = result.scalar_one_or_none()
 
         if not topup or topup.status != "pending":
-            await message.answer("درخواست یافت نشد یا قبلاً بررسی شده!")
+            await message.answer("درخواست پیدا نشد یا قبلاً بررسی شده.")
             await state.clear()
             return
 
@@ -747,7 +747,7 @@ async def manual_topup_amount(message: Message, state: FSMContext):
         balance = await _credit_topup(session, topup, amount, message.from_user.id)
         if balance is None:
             await session.rollback()
-            await message.answer("درخواست یافت نشد یا قبلاً بررسی شده!")
+            await message.answer("درخواست پیدا نشد یا قبلاً بررسی شده.")
             await state.clear()
             return
         await session.commit()
@@ -818,12 +818,12 @@ async def reject_topup(callback: CallbackQuery):
 
         try:
             await callback.message.edit_caption(
-                caption=(callback.message.caption or "") + "\n\n❌ رد شد"
+                caption=(callback.message.caption or "") + "\n\nرد شد"
             )
         except Exception:
             pass
 
-        await callback.answer("درخواست شارژ رد شد!", show_alert=True)
+        await callback.answer("درخواست شارژ رد شد.", show_alert=True)
 
 
 async def _send_dashboard(bot, chat_id: int) -> None:
@@ -835,21 +835,21 @@ async def _send_dashboard(bot, chat_id: int) -> None:
         stock_lines = []
         for plan in plans:
             n = await count_available(session, plan["id"])
-            stock_lines.append(f"  • {plan['name']}: {n} آزاد")
+            stock_lines.append(f"  {plan['name']}: {n} آزاد")
         if not stock_lines:
             stock_lines = ["  • —"]
 
         await bot.send_message(
             chat_id=chat_id,
             text=(
-                "📊 داشبورد مدیریت\n\n"
-                f"👥 کاربران: {stats['total_users']}\n"
-                f"📦 سفارشات: {stats['total_orders']}\n"
-                f"⏳ پرداخت در انتظار: {stats['pending_payments']}\n"
-                f"💳 اکانت فعال: {stats['active_accounts']}\n"
-                f"💰 درآمد کل: {stats['total_revenue']:,} تومان\n\n"
-                "📦 موجودی کانفیگ:\n" + "\n".join(stock_lines) + "\n\n"
-                "🗂 از منو «⚙️ پنل ادمین» کانفیگ‌ها را مدیریت کنید."
+                "داشبورد مدیریت\n\n"
+                f"کاربران: {stats['total_users']}\n"
+                f"سفارشات: {stats['total_orders']}\n"
+                f"پرداخت در انتظار: {stats['pending_payments']}\n"
+                f"اکانت فعال: {stats['active_accounts']}\n"
+                f"درآمد کل: {stats['total_revenue']:,} تومان\n\n"
+                "موجودی کانفیگ:\n" + "\n".join(stock_lines) + "\n\n"
+                "از منو «پنل ادمین» کانفیگ‌ها را مدیریت کنید."
             ),
         )
 
@@ -873,10 +873,10 @@ async def _send_pending_payments(bot, chat_id: int) -> None:
         topups = topup_result.scalars().all()
 
         if not payments and not topups:
-            await bot.send_message(chat_id=chat_id, text="هیچ پرداخت در انتظاری وجود ندارد.")
+            await bot.send_message(chat_id=chat_id, text="پرداخت در انتظاری وجود ندارد.")
             return
 
-        text = "📋 پرداخت‌های در انتظار:\n\n"
+        text = "پرداخت‌های در انتظار:\n\n"
         for payment in payments:
             order_result = await session.execute(
                 select(Order).where(Order.id == payment.order_id)
@@ -889,23 +889,23 @@ async def _send_pending_payments(bot, chat_id: int) -> None:
                 wallet_line = ""
                 if wallet_debit > 0:
                     wallet_line = (
-                        f"💳 کیف پول: {wallet_debit:,} | "
-                        f"💵 رسید: {amount_due:,}\n"
+                        f"از کیف پول: {wallet_debit:,} | "
+                        f"رسید: {amount_due:,}\n"
                     )
                 text += (
-                    f"🆔 پرداخت #{payment.id} | 👤 {payment.user_id}\n"
-                    f"📦 {plan_label} | {order.days}روز {order.traffic_gb}GB\n"
-                    f"💰 کل: {order.price:,} تومان\n"
+                    f"پرداخت #{payment.id} | کاربر {payment.user_id}\n"
+                    f"{plan_label} | {order.days} روز {order.traffic_gb}GB\n"
+                    f"کل: {order.price:,} تومان\n"
                     f"{wallet_line}"
                     f"{'─' * 25}\n"
                 )
 
         if topups:
-            text += "\n💳 شارژ کیف پول در انتظار:\n\n"
+            text += "\nشارژ کیف پول در انتظار:\n\n"
             for topup in topups:
                 text += (
-                    f"🆔 شارژ #{topup.id} | 👤 {topup.user_id}\n"
-                    f"💰 درخواستی: {topup.requested_amount:,} تومان\n"
+                    f"شارژ #{topup.id} | کاربر {topup.user_id}\n"
+                    f"درخواستی: {topup.requested_amount:,} تومان\n"
                     f"{'─' * 25}\n"
                 )
 
@@ -915,7 +915,7 @@ async def _send_pending_payments(bot, chat_id: int) -> None:
 @router.callback_query(F.data == "admin:dashboard")
 async def admin_dashboard_callback(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
-        await callback.answer("دسترسی ندارید!", show_alert=True)
+        await callback.answer("دسترسی ندارید.", show_alert=True)
         return
     try:
         await _send_dashboard(callback.bot, callback.message.chat.id)
@@ -928,7 +928,7 @@ async def admin_dashboard_callback(callback: CallbackQuery):
 @router.callback_query(F.data == "admin:pending")
 async def admin_pending_callback(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
-        await callback.answer("دسترسی ندارید!", show_alert=True)
+        await callback.answer("دسترسی ندارید.", show_alert=True)
         return
     await _send_pending_payments(callback.bot, callback.message.chat.id)
     await callback.answer()
@@ -937,7 +937,7 @@ async def admin_pending_callback(callback: CallbackQuery):
 @router.message(Command("dashboard"))
 async def show_dashboard(message: Message):
     if not is_admin(message.from_user.id):
-        await message.answer("⛔ شما دسترسی ادمین ندارید.")
+        await message.answer("شما دسترسی ادمین ندارید.")
         return
     try:
         await _send_dashboard(message.bot, message.chat.id)
@@ -949,7 +949,7 @@ async def show_dashboard(message: Message):
 @router.message(Command("pending"))
 async def show_pending_payments(message: Message):
     if not is_admin(message.from_user.id):
-        await message.answer("⛔ شما دسترسی ادمین ندارید.")
+        await message.answer("شما دسترسی ادمین ندارید.")
         return
     await _send_pending_payments(message.bot, message.chat.id)
 
@@ -957,7 +957,7 @@ async def show_pending_payments(message: Message):
 @router.message(Command("payments"))
 async def show_payment_history(message: Message):
     if not is_admin(message.from_user.id):
-        await message.answer("⛔ شما دسترسی ادمین ندارید.")
+        await message.answer("شما دسترسی ادمین ندارید.")
         return
 
     async with AsyncSessionLocal() as session:
@@ -967,11 +967,11 @@ async def show_payment_history(message: Message):
         payments = result.scalars().all()
 
         if not payments:
-            await message.answer("هیچ پرداختی یافت نشد.")
+            await message.answer("پرداختی پیدا نشد.")
             return
 
-        status_map = {"pending": "⏳", "approved": "✅", "rejected": "❌"}
-        text = "📜 تاریخچه پرداخت‌ها:\n\n"
+        status_map = {"pending": "در انتظار", "approved": "تایید", "rejected": "رد"}
+        text = "تاریخچه پرداخت‌ها:\n\n"
         for payment in payments:
             order_result = await session.execute(
                 select(Order).where(Order.id == payment.order_id)
@@ -979,6 +979,6 @@ async def show_payment_history(message: Message):
             order = order_result.scalar_one_or_none()
             if order:
                 icon = status_map.get(payment.status, "?")
-                text += f"{icon} #{payment.id} | {order.price:,}T | {payment.created_at:%Y-%m-%d}\n"
+                text += f"{icon} #{payment.id} | {order.price:,} تومان | {payment.created_at:%Y-%m-%d}\n"
 
         await message.answer(text)

@@ -47,10 +47,10 @@ async def _try_delete_message(message: Message) -> None:
 async def _panel_status_text(session) -> str:
     ps = await get_panel_settings(session)
     mode = "خودکار (3x-ui)" if ps.provisioning_mode == PROVISIONING_AUTO else "انبار دستی"
-    verified = "✅ متصل" if ps.is_verified else "❌ تنظیم نشده"
+    verified = "متصل" if ps.is_verified else "تنظیم نشده"
     inbounds = get_selected_inbound_ids(ps)
     lines = [
-        "🔗 تنظیمات پنل 3x-ui\n",
+        "تنظیمات پنل 3x-ui\n",
         f"وضعیت اتصال: {verified}",
         f"حالت ارسال کانفیگ: {mode}",
     ]
@@ -94,7 +94,7 @@ async def panel_toggle_mode(callback: CallbackQuery):
         else:
             if not ps.is_verified:
                 await callback.answer(
-                    "ابتدا اتصال پنل را تنظیم و تایید کنید.",
+                    "اول اتصال پنل را تنظیم و تایید کنید.",
                     show_alert=True,
                 )
                 return
@@ -130,7 +130,7 @@ async def panel_setup_start(callback: CallbackQuery, state: FSMContext):
         "آدرس کامل پنل 3x-ui را بفرستید.\n\n"
         "مثال:\n"
         "`https://example.com:2053/YJBJbvcdMmIAnCYoAN`\n\n"
-        "برای لغو از دکمه «❌ لغو» استفاده کنید.",
+        "برای لغو از دکمه «لغو» استفاده کنید.",
         parse_mode="Markdown",
         reply_markup=admin_cancel_keyboard(),
     )
@@ -183,12 +183,12 @@ async def panel_receive_url(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
     if not message.text:
-        await message.answer("لطفاً URL را به صورت متن ارسال کنید.")
+        await message.answer("آدرس را به صورت متن بفرستید.")
         return
     try:
         url = normalize_panel_url(message.text.strip())
     except ValueError as exc:
-        await message.answer(f"❌ {exc}")
+        await message.answer(f"{exc}")
         return
     await state.update_data(panel_url=url)
     await state.set_state(AdminStates.waiting_for_panel_username)
@@ -245,8 +245,8 @@ async def panel_receive_password(message: Message, state: FSMContext):
                     await session.commit()
                 await state.set_state(AdminStates.waiting_for_subscription_base_url)
                 await message.answer(
-                    f"✅ اتصال پنل OK ({enabled_count} inbound فعال)\n\n"
-                    f"⚠️ {sub_exc}\n\n"
+                    f"اتصال پنل برقرار شد ({enabled_count} inbound فعال).\n\n"
+                    f"{sub_exc}\n\n"
                     "آدرس پایه Subscription را دستی بفرستید:\n"
                     "مثال: `https://example.com:2096/sub/`",
                     parse_mode="Markdown",
@@ -259,11 +259,11 @@ async def panel_receive_password(message: Message, state: FSMContext):
                 "subscription_base_url": sub_base,
             }
     except XUIError as exc:
-        await message.answer(f"❌ اتصال ناموفق: {exc}")
+        await message.answer(f"اتصال ناموفق: {exc}")
         return
     except Exception as exc:
         logger.error("Panel connection test failed: %s", exc)
-        await message.answer("❌ خطا در اتصال به پنل.")
+        await message.answer("خطا در اتصال به پنل.")
         return
 
     sub_base = summary["subscription_base_url"]
@@ -278,10 +278,10 @@ async def panel_receive_password(message: Message, state: FSMContext):
 
     await state.clear()
     await message.answer(
-        "✅ اتصال موفق و تنظیمات ذخیره شد!\n\n"
+        "اتصال موفق بود و تنظیمات ذخیره شد.\n\n"
         f"Inbound فعال: {summary['enabled_inbounds']} / {summary['total_inbounds']}\n"
         f"Subscription (خوانده‌شده از پنل):\n`{sub_base}`\n\n"
-        "از منوی «🔗 پنل 3x-ui» → «📡 بروزرسانی Inboundها» inboundها را انتخاب کنید.\n"
+        "از منوی «پنل 3x-ui» → «بروزرسانی Inboundها» inboundها را انتخاب کنید.\n"
         "سپس حالت ارسال را روی «خودکار» بگذارید.",
         parse_mode="Markdown",
         reply_markup=main_menu_keyboard(
@@ -308,14 +308,14 @@ async def panel_receive_subscription_base(message: Message, state: FSMContext):
 
     sub_base = message.text.strip().rstrip("/") + "/"
     if not is_valid_subscription_base_url(sub_base):
-        await message.answer("❌ آدرس Subscription نامعتبر است. باید با http:// یا https:// شروع شود.")
+        await message.answer("آدرس Subscription نامعتبر است. باید با http:// یا https:// شروع شود.")
         return
 
     async with AsyncSessionLocal() as session:
         ps = await get_panel_settings(session)
         if not get_panel_password(ps):
             await message.answer(
-                "❌ ابتدا اتصال پنل را از نو تنظیم کنید.",
+                "اول اتصال پنل را از نو تنظیم کنید.",
                 reply_markup=main_menu_keyboard(
                     is_admin=message.from_user.id in settings.ADMIN_IDS
                 ),
@@ -328,8 +328,8 @@ async def panel_receive_subscription_base(message: Message, state: FSMContext):
 
     await state.clear()
     await message.answer(
-        "✅ آدرس Subscription دستی ذخیره شد.\n\n"
-        "از منوی «🔗 پنل 3x-ui» → «📡 بروزرسانی Inboundها» inboundها را انتخاب کنید.",
+        "آدرس Subscription دستی ذخیره شد.\n\n"
+        "از منوی «پنل 3x-ui» → «بروزرسانی Inboundها» inboundها را انتخاب کنید.",
         reply_markup=main_menu_keyboard(
             is_admin=message.from_user.id in settings.ADMIN_IDS
         ),
@@ -376,7 +376,7 @@ async def panel_test_connection(callback: CallbackQuery):
             return
 
     await callback.message.answer(
-        f"✅ اتصال OK — {summary['enabled_inbounds']} inbound فعال\n"
+        f"اتصال برقرار شد — {summary['enabled_inbounds']} inbound فعال\n"
         f"Subscription: `{sub_base}`",
         parse_mode="Markdown",
     )
@@ -392,7 +392,7 @@ async def panel_list_inbounds(callback: CallbackQuery):
     async with AsyncSessionLocal() as session:
         ps = await get_panel_settings(session)
         if not ps.is_verified:
-            await callback.answer("ابتدا اتصال پنل را تنظیم کنید.", show_alert=True)
+            await callback.answer("اول اتصال پنل را تنظیم کنید.", show_alert=True)
             return
         try:
             async with xui_client_for_panel(ps) as client:
@@ -414,7 +414,7 @@ async def panel_list_inbounds(callback: CallbackQuery):
         selected = set(selected_list)
         await callback.message.edit_text(
             "Inboundهایی که برای کاربران استفاده می‌شوند را انتخاب کنید:\n"
-            "(روی هر مورد بزنید تا ✅/⬜ شود)",
+            "(روی هر مورد بزنید تا انتخاب/لغو شود)",
             reply_markup=inbound_select_keyboard(enabled, selected),
         )
     await callback.answer()
@@ -473,11 +473,11 @@ async def panel_inbounds_save(callback: CallbackQuery):
 
         await callback.answer("در حال همگام‌سازی کاربران…")
         await callback.message.edit_text(
-            f"⏳ در حال اعمال {len(selected)} inbound روی اکانت‌های فعال…"
+            f"در حال اعمال {len(selected)} inbound روی اکانت‌های فعال…"
         )
         ok, fail = await sync_active_clients_inbounds(session, ps, selected)
         text = await _panel_status_text(session)
-        summary = f"\n\n✅ {len(selected)} inbound ذخیره شد."
+        summary = f"\n\n{len(selected)} inbound ذخیره شد."
         if ok or fail:
             summary += f"\nهمگام‌سازی کلاینت‌ها: {ok} موفق"
             if fail:

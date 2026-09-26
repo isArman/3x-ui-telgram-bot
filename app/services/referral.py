@@ -162,11 +162,11 @@ def format_price_block(
         pay = int(payable)
         saved = original - pay
         return (
-            f"💰 قابل پرداخت: {pay:,} تومان\n"
-            f"🏷 قیمت پلن: {original:,} تومان\n"
-            f"📉 تخفیف معرفی ({DISCOUNT_PERCENT}٪): −{saved:,} تومان"
+            f"مبلغ قابل پرداخت: {pay:,} تومان\n"
+            f"قیمت پلن: {original:,} تومان\n"
+            f"تخفیف معرفی ({DISCOUNT_PERCENT}٪): −{saved:,} تومان"
         )
-    return f"💰 قیمت: {original:,} تومان"
+    return f"قیمت: {original:,} تومان"
 
 
 def format_order_price_lines(order: Order) -> str:

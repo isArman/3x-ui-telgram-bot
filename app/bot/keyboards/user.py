@@ -50,7 +50,7 @@ def wallet_keyboard() -> ReplyKeyboardMarkup:
 def confirm_topup_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(
-        InlineKeyboardButton(text="✅ تایید", callback_data="confirm_topup"),
+        InlineKeyboardButton(text="تایید", callback_data="confirm_topup"),
     )
     builder.row(
         InlineKeyboardButton(text=BACK_BUTTON, callback_data="back_topup_amount"),
@@ -63,13 +63,13 @@ def wallet_pay_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(
-            text="✅ بله، استفاده از کیف پول",
+            text="بله، از کیف پول",
             callback_data="wallet_pay:yes",
         ),
     )
     builder.row(
         InlineKeyboardButton(
-            text="💳 خیر، فقط کارت",
+            text="خیر، فقط کارت",
             callback_data="wallet_pay:no",
         ),
     )
@@ -112,7 +112,7 @@ def confirm_order_keyboard(back_callback: str = "back:plans") -> InlineKeyboardM
     """Order confirmation keyboard"""
     builder = InlineKeyboardBuilder()
     builder.row(
-        InlineKeyboardButton(text="✅ تایید", callback_data="confirm_order"),
+        InlineKeyboardButton(text="تایید", callback_data="confirm_order"),
     )
     builder.row(
         InlineKeyboardButton(text=BACK_BUTTON, callback_data=back_callback),
@@ -127,7 +127,7 @@ def accounts_list_keyboard(accounts) -> InlineKeyboardMarkup:
     for account in accounts:
         builder.row(
             InlineKeyboardButton(
-                text=f"🔄 تمدید سفارش #{account.order_id}",
+                text=f"تمدید سفارش #{account.order_id}",
                 callback_data=f"renew_account:{account.id}",
             )
         )
@@ -155,7 +155,7 @@ def renew_plans_keyboard(plans: List[Dict[str, Any]], vpn_account_id: int) -> In
 def confirm_renew_keyboard(vpn_account_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(
-        InlineKeyboardButton(text="✅ تایید تمدید", callback_data="confirm_renew_order"),
+        InlineKeyboardButton(text="تایید تمدید", callback_data="confirm_renew_order"),
     )
     builder.row(
         InlineKeyboardButton(text=BACK_BUTTON, callback_data=f"renew_account:{vpn_account_id}"),

@@ -38,11 +38,11 @@ async def check_expiring_accounts(session: AsyncSession, bot: Bot) -> int:
             days_left = (account.expires_at - now).days
 
             message = (
-                f"⚠️ هشدار انقضای اکانت\n\n"
+                f"اکانت شما نزدیک انقضاست.\n\n"
                 f"اکانت شما (سفارش #{account.order_id}) در {days_left} روز دیگر منقضی می‌شود.\n\n"
-                f"📅 تاریخ انقضا: {account.expires_at.strftime('%Y-%m-%d')}\n"
-                f"📊 حجم: {account.traffic_limit_gb} گیگابایت\n\n"
-                f"برای تمدید از «💳 اکانت‌های من» استفاده کنید."
+                f"تاریخ انقضا: {account.expires_at.strftime('%Y-%m-%d')}\n"
+                f"حجم: {account.traffic_limit_gb} گیگابایت\n\n"
+                f"برای تمدید از «اکانت‌های من» استفاده کنید."
             )
 
             await bot.send_message(chat_id=account.user_id, text=message)
@@ -111,13 +111,13 @@ async def check_low_traffic_accounts(session: AsyncSession, bot: Bot) -> int:
                     remaining_pct = remaining_traffic_percent(total_bytes, used_bytes)
 
                     message = (
-                        f"⚠️ هشدار اتمام حجم\n\n"
+                        f"حجم اکانت شما در حال تمام شدن است.\n\n"
                         f"اکانت شما (سفارش #{account.order_id}) کمتر از ۱۰٪ حجم باقی‌مانده دارد.\n\n"
-                        f"📊 حجم کل: {format_gb(total_bytes)} GB\n"
-                        f"📉 مصرف شده: {format_gb(used_bytes)} GB\n"
-                        f"💾 باقی‌مانده: {format_gb(remaining_bytes)} GB "
+                        f"حجم کل: {format_gb(total_bytes)} GB\n"
+                        f"مصرف شده: {format_gb(used_bytes)} GB\n"
+                        f"باقی‌مانده: {format_gb(remaining_bytes)} GB "
                         f"(~{remaining_pct:.1f}%)\n\n"
-                        f"برای تمدید از «💳 اکانت‌های من» استفاده کنید."
+                        f"برای تمدید از «اکانت‌های من» استفاده کنید."
                     )
 
                     await bot.send_message(chat_id=account.user_id, text=message)

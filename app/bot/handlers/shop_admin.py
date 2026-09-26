@@ -56,10 +56,10 @@ _SHOP_FSM = StateFilter(
 
 def _card_text(card_number: str | None, card_holder: str | None) -> str:
     return (
-        "💳 تنظیمات کارت بانکی\n\n"
+        "تنظیمات کارت بانکی\n\n"
         f"شماره کارت: {card_number or '—'}\n"
         f"نام صاحب کارت: {card_holder or '—'}\n\n"
-        "این مقادیر برای خرید و شارژ کیف پول به کاربر نشان داده می‌شوند."
+        "این اطلاعات در خرید و شارژ کیف پول به کاربر نشان داده می‌شود."
     )
 
 
@@ -77,7 +77,7 @@ async def shop_fsm_menu_interrupt(message: Message, state: FSMContext):
 @router.callback_query(F.data == "admin:card")
 async def admin_card_menu(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
-        await callback.answer("دسترسی ندارید!", show_alert=True)
+        await callback.answer("دسترسی ندارید.", show_alert=True)
         return
     await state.clear()
     async with AsyncSessionLocal() as session:
@@ -92,11 +92,11 @@ async def admin_card_menu(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "admin:card:number")
 async def admin_card_number_start(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
-        await callback.answer("دسترسی ندارید!", show_alert=True)
+        await callback.answer("دسترسی ندارید.", show_alert=True)
         return
     await state.set_state(AdminStates.waiting_for_card_number)
     await callback.message.answer(
-        "شماره کارت جدید را ارسال کنید:",
+        "شماره کارت جدید را بفرستید:",
         reply_markup=admin_cancel_keyboard(),
     )
     await callback.answer()
@@ -105,11 +105,11 @@ async def admin_card_number_start(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "admin:card:holder")
 async def admin_card_holder_start(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
-        await callback.answer("دسترسی ندارید!", show_alert=True)
+        await callback.answer("دسترسی ندارید.", show_alert=True)
         return
     await state.set_state(AdminStates.waiting_for_card_holder)
     await callback.message.answer(
-        "نام صاحب کارت را ارسال کنید:",
+        "نام صاحب کارت را بفرستید:",
         reply_markup=admin_cancel_keyboard(),
     )
     await callback.answer()
@@ -124,13 +124,13 @@ async def admin_card_number_save(message: Message, state: FSMContext):
         return
     value = (message.text or "").strip()
     if len(value) < 4:
-        await message.answer("❌ شماره کارت نامعتبر است.")
+        await message.answer("شماره کارت نامعتبر است.")
         return
     async with AsyncSessionLocal() as session:
         row = await set_card_number(session, value)
     await state.clear()
     await message.answer(
-        "✅ شماره کارت ذخیره شد.\n\n" + _card_text(row.card_number, row.card_holder),
+        "شماره کارت ذخیره شد.\n\n" + _card_text(row.card_number, row.card_holder),
         reply_markup=main_menu_keyboard(
             is_admin=message.from_user.id in settings.ADMIN_IDS
         ),
@@ -147,13 +147,13 @@ async def admin_card_holder_save(message: Message, state: FSMContext):
         return
     value = (message.text or "").strip()
     if len(value) < 2:
-        await message.answer("❌ نام نامعتبر است.")
+        await message.answer("نام نامعتبر است.")
         return
     async with AsyncSessionLocal() as session:
         row = await set_card_holder(session, value)
     await state.clear()
     await message.answer(
-        "✅ نام صاحب کارت ذخیره شد.\n\n" + _card_text(row.card_number, row.card_holder),
+        "نام صاحب کارت ذخیره شد.\n\n" + _card_text(row.card_number, row.card_holder),
         reply_markup=main_menu_keyboard(
             is_admin=message.from_user.id in settings.ADMIN_IDS
         ),
@@ -164,11 +164,11 @@ async def admin_card_holder_save(message: Message, state: FSMContext):
 @router.callback_query(F.data == "admin:plans")
 async def admin_plans_menu(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
-        await callback.answer("دسترسی ندارید!", show_alert=True)
+        await callback.answer("دسترسی ندارید.", show_alert=True)
         return
     await state.clear()
     await callback.message.edit_text(
-        "📦 مدیریت پلن‌ها\n\nپلن‌های آماده و قیمت پلن سفارشی را از اینجا ویرایش کنید.",
+        "مدیریت پلن‌ها\n\nپلن‌های آماده و قیمت پلن سفارشی را از اینجا ویرایش کنید.",
         reply_markup=plans_admin_keyboard(),
     )
     await callback.answer()
@@ -177,7 +177,7 @@ async def admin_plans_menu(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "admin:plans:list")
 async def admin_plans_list(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
-        await callback.answer("دسترسی ندارید!", show_alert=True)
+        await callback.answer("دسترسی ندارید.", show_alert=True)
         return
     await state.clear()
     async with AsyncSessionLocal() as session:
@@ -189,7 +189,7 @@ async def admin_plans_list(callback: CallbackQuery, state: FSMContext):
         )
     else:
         await callback.message.edit_text(
-            "📋 پلن‌ها (برای ویرایش یکی را انتخاب کنید):",
+            "پلن‌ها (برای ویرایش یکی را انتخاب کنید):",
             reply_markup=plan_admin_list_keyboard(plans),
         )
     await callback.answer()
@@ -198,22 +198,22 @@ async def admin_plans_list(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("admin:plans:view:"))
 async def admin_plan_view(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
-        await callback.answer("دسترسی ندارید!", show_alert=True)
+        await callback.answer("دسترسی ندارید.", show_alert=True)
         return
     plan_id = callback.data.split(":")[-1]
     async with AsyncSessionLocal() as session:
         plan = await get_plan_row(session, plan_id)
     if not plan:
-        await callback.answer("پلن یافت نشد!", show_alert=True)
+        await callback.answer("پلن پیدا نشد.", show_alert=True)
         return
     status = "فعال" if plan.is_active else "غیرفعال"
     text = (
-        f"📦 {plan.name}\n\n"
-        f"🆔 `{plan.id}`\n"
+        f"{plan.name}\n\n"
+        f"`{plan.id}`\n"
         f"⏱ {plan.days} روز\n"
-        f"📊 {plan.traffic_gb} گیگابایت\n"
-        f"💰 {plan.price:,} تومان\n"
-        f"📝 {plan.description or '—'}\n"
+        f"{plan.traffic_gb} گیگابایت\n"
+        f"{plan.price:,} تومان\n"
+        f"{plan.description or '—'}\n"
         f"وضعیت: {status}"
     )
     await callback.message.edit_text(
@@ -226,23 +226,23 @@ async def admin_plan_view(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("admin:plans:toggle:"))
 async def admin_plan_toggle(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
-        await callback.answer("دسترسی ندارید!", show_alert=True)
+        await callback.answer("دسترسی ندارید.", show_alert=True)
         return
     plan_id = callback.data.split(":")[-1]
     async with AsyncSessionLocal() as session:
         plan = await get_plan_row(session, plan_id)
         if not plan:
-            await callback.answer("پلن یافت نشد!", show_alert=True)
+            await callback.answer("پلن پیدا نشد.", show_alert=True)
             return
         plan = await set_plan_active(session, plan, not plan.is_active)
         status = "فعال" if plan.is_active else "غیرفعال"
         text = (
-            f"📦 {plan.name}\n\n"
-            f"🆔 `{plan.id}`\n"
+            f"{plan.name}\n\n"
+            f"`{plan.id}`\n"
             f"⏱ {plan.days} روز\n"
-            f"📊 {plan.traffic_gb} گیگابایت\n"
-            f"💰 {plan.price:,} تومان\n"
-            f"📝 {plan.description or '—'}\n"
+            f"{plan.traffic_gb} گیگابایت\n"
+            f"{plan.price:,} تومان\n"
+            f"{plan.description or '—'}\n"
             f"وضعیت: {status}"
         )
     await callback.message.edit_text(
@@ -255,7 +255,7 @@ async def admin_plan_toggle(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("admin:plans:edit:"))
 async def admin_plan_edit_start(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
-        await callback.answer("دسترسی ندارید!", show_alert=True)
+        await callback.answer("دسترسی ندارید.", show_alert=True)
         return
     parts = callback.data.split(":")
     # admin:plans:edit:{id}:{field}
@@ -334,17 +334,17 @@ async def admin_plan_edit_save(message: Message, state: FSMContext):
 
     await state.clear()
     await message.answer(
-        "✅ ذخیره شد.",
+        "ذخیره شد.",
         reply_markup=main_menu_keyboard(
             is_admin=message.from_user.id in settings.ADMIN_IDS
         ),
     )
     status = "فعال" if plan.is_active else "غیرفعال"
     await message.answer(
-        f"📦 {plan.name}\n\n"
-        f"🆔 `{plan.id}`\n"
-        f"⏱ {plan.days} روز | 📊 {plan.traffic_gb} GB\n"
-        f"💰 {plan.price:,} تومان\n"
+        f"{plan.name}\n\n"
+        f"`{plan.id}`\n"
+        f"{plan.days} روز | {plan.traffic_gb} GB\n"
+        f"{plan.price:,} تومان\n"
         f"وضعیت: {status}",
         reply_markup=plan_admin_detail_keyboard(plan.id, plan.is_active),
     )
@@ -353,7 +353,7 @@ async def admin_plan_edit_save(message: Message, state: FSMContext):
 @router.callback_query(F.data == "admin:plans:add")
 async def admin_plan_add_start(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
-        await callback.answer("دسترسی ندارید!", show_alert=True)
+        await callback.answer("دسترسی ندارید.", show_alert=True)
         return
     await state.clear()
     await state.set_state(AdminStates.waiting_for_plan_id)
@@ -373,11 +373,11 @@ async def admin_plan_add_id(message: Message, state: FSMContext):
         return
     plan_id = (message.text or "").strip().lower().replace(" ", "_")
     if not plan_id or not plan_id.replace("_", "").replace("-", "").isalnum():
-        await message.answer("❌ شناسه فقط حروف/عدد/-/_ باشد.")
+        await message.answer("شناسه فقط حروف، عدد، - و _ باشد.")
         return
     async with AsyncSessionLocal() as session:
         if await get_plan_row(session, plan_id):
-            await message.answer("❌ این شناسه قبلاً وجود دارد.")
+            await message.answer("این شناسه قبلاً وجود دارد.")
             return
     await state.update_data(new_plan_id=plan_id)
     await state.set_state(AdminStates.waiting_for_plan_name)
@@ -393,7 +393,7 @@ async def admin_plan_add_name(message: Message, state: FSMContext):
         return
     name = (message.text or "").strip()
     if len(name) < 1:
-        await message.answer("❌ نام نامعتبر است.")
+        await message.answer("نام نامعتبر است.")
         return
     await state.update_data(new_plan_name=name)
     await state.set_state(AdminStates.waiting_for_plan_days)
@@ -479,7 +479,7 @@ async def admin_plan_add_description(message: Message, state: FSMContext):
         )
     await state.clear()
     await message.answer(
-        f"✅ پلن «{plan.name}» اضافه شد.\n💰 {plan.price:,} تومان",
+        f"پلن «{plan.name}» اضافه شد.\n{plan.price:,} تومان",
         reply_markup=main_menu_keyboard(
             is_admin=message.from_user.id in settings.ADMIN_IDS
         ),
@@ -493,13 +493,13 @@ async def admin_plan_add_description(message: Message, state: FSMContext):
 @router.callback_query(F.data == "admin:plans:pricing")
 async def admin_pricing_menu(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
-        await callback.answer("دسترسی ندارید!", show_alert=True)
+        await callback.answer("دسترسی ندارید.", show_alert=True)
         return
     await state.clear()
     async with AsyncSessionLocal() as session:
         pricing = await get_pricing_settings(session)
     await callback.message.edit_text(
-        "💰 قیمت پلن سفارشی\n\n"
+        "قیمت پلن سفارشی\n\n"
         f"هر روز: {pricing.per_day:,} تومان\n"
         f"هر گیگابایت: {pricing.per_gb:,} تومان\n\n"
         "فرمول: (روز × قیمت روز) + (گیگ × قیمت گیگ)",
@@ -511,11 +511,11 @@ async def admin_pricing_menu(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "admin:plans:pricing:day")
 async def admin_pricing_day_start(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
-        await callback.answer("دسترسی ندارید!", show_alert=True)
+        await callback.answer("دسترسی ندارید.", show_alert=True)
         return
     await state.set_state(AdminStates.waiting_for_pricing_per_day)
     await callback.message.answer(
-        "قیمت هر روز (تومان) را بفرستید:",
+        "قیمت هر روز را به تومان بفرستید:",
         reply_markup=admin_cancel_keyboard(),
     )
     await callback.answer()
@@ -524,11 +524,11 @@ async def admin_pricing_day_start(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "admin:plans:pricing:gb")
 async def admin_pricing_gb_start(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
-        await callback.answer("دسترسی ندارید!", show_alert=True)
+        await callback.answer("دسترسی ندارید.", show_alert=True)
         return
     await state.set_state(AdminStates.waiting_for_pricing_per_gb)
     await callback.message.answer(
-        "قیمت هر گیگابایت (تومان) را بفرستید:",
+        "قیمت هر گیگابایت را به تومان بفرستید:",
         reply_markup=admin_cancel_keyboard(),
     )
     await callback.answer()
@@ -552,7 +552,7 @@ async def admin_pricing_day_save(message: Message, state: FSMContext):
         pricing = await set_pricing(session, per_day=value)
     await state.clear()
     await message.answer(
-        f"✅ قیمت هر روز: {pricing.per_day:,} تومان",
+        f"قیمت هر روز: {pricing.per_day:,} تومان",
         reply_markup=main_menu_keyboard(
             is_admin=message.from_user.id in settings.ADMIN_IDS
         ),
@@ -581,7 +581,7 @@ async def admin_pricing_gb_save(message: Message, state: FSMContext):
         pricing = await set_pricing(session, per_gb=value)
     await state.clear()
     await message.answer(
-        f"✅ قیمت هر گیگ: {pricing.per_gb:,} تومان",
+        f"قیمت هر گیگ: {pricing.per_gb:,} تومان",
         reply_markup=main_menu_keyboard(
             is_admin=message.from_user.id in settings.ADMIN_IDS
         ),

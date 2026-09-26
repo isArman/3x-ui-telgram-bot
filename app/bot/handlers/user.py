@@ -93,7 +93,7 @@ def build_plans_text(plans: list, *, referral_hint: str = "") -> str:
     if referral_hint:
         text += referral_hint
     if not plans:
-        return text + "هنوز پلن آماده‌ای تعریف نشده است.\n"
+        return text + "هنوز پلنی ثبت نشده است.\n"
     for plan in plans:
         text += get_text("plan_details", **plan) + "\n"
     return text
@@ -212,8 +212,8 @@ async def send_card_payment_instructions(
         await bot.send_message(
             chat_id=user_id,
             text=(
-                "❌ اطلاعات کارت بانکی هنوز توسط ادمین تنظیم نشده است.\n"
-                "لطفاً بعداً دوباره تلاش کنید."
+                "اطلاعات کارت بانکی هنوز تنظیم نشده است.\n"
+                "کمی بعد دوباره تلاش کنید."
             ),
             reply_markup=user_main_menu(user_id),
         )
@@ -256,13 +256,13 @@ async def notify_admins_wallet_manual(bot, payment: Payment, order: Order) -> No
 
     wallet_debit = int(order.wallet_debit or 0)
     text = (
-        "💳 سفارش پرداخت‌شده با کیف پول — نیاز به لینک دستی\n\n"
-        f"👤 کاربر: {order.user_id}\n"
-        f"🔢 سفارش: #{order.id}\n"
-        f"📦 {order.days} روز | {order.traffic_gb} گیگابایت\n"
-        f"💰 مبلغ: {order.price:,} تومان\n"
-        f"💳 از کیف پول: {wallet_debit:,} تومان\n\n"
-        "روی تایید بزنید و لینک را ارسال کنید."
+        "سفارش با کیف پول پرداخت شد و به لینک دستی نیاز دارد.\n\n"
+        f"کاربر: {order.user_id}\n"
+        f"سفارش: #{order.id}\n"
+        f"{order.days} روز | {order.traffic_gb} گیگابایت\n"
+        f"مبلغ: {order.price:,} تومان\n"
+        f"از کیف پول: {wallet_debit:,} تومان\n\n"
+        "تایید کنید و لینک را بفرستید."
     )
     for admin_id in settings.ADMIN_IDS:
         try:
@@ -312,7 +312,7 @@ async def fulfill_full_wallet_order(bot, session, payment: Payment, order: Order
     await bot.send_message(
         chat_id=order.user_id,
         text=(
-            "✅ پرداخت از کیف پول ثبت شد.\n"
+            "پرداخت از کیف پول ثبت شد.\n"
             "اکانت شما به‌زودی توسط ادمین ارسال می‌شود."
         ),
     )
@@ -450,7 +450,7 @@ async def select_plan(callback: CallbackQuery, state: FSMContext):
     async with AsyncSessionLocal() as session:
         plan = await get_plan(session, plan_id, active_only=True)
         if not plan:
-            await callback.answer("پلن یافت نشد!", show_alert=True)
+            await callback.answer("پلن پیدا نشد.", show_alert=True)
             return
         price_block = await price_block_for_tg_user(
             session, callback.from_user, plan["price"]
@@ -601,7 +601,7 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext):
     
     if not can_proceed:
         await callback.answer(
-            f"لطفاً {remaining} ثانیه صبر کنید قبل از ایجاد سفارش جدید.",
+            f"{remaining} ثانیه صبر کنید و بعد سفارش جدید ثبت کنید.",
             show_alert=True
         )
         logger.warning(f"User {callback.from_user.id} hit rate limit for order creation")
@@ -613,7 +613,7 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext):
 
     if not resolved:
         await callback.answer(
-            "اطلاعات سفارش نامعتبر است. لطفاً دوباره پلن را انتخاب کنید.",
+            "اطلاعات سفارش نامعتبر است. دوباره پلن را انتخاب کنید.",
             show_alert=True,
         )
         await state.clear()
@@ -658,7 +658,7 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext):
         rate_limiter.reset_user(callback.from_user.id, "create_order")
         logger.error(f"Error creating order for user {callback.from_user.id}: {e}")
         await callback.message.edit_text(
-            "خطایی در ایجاد سفارش رخ داد. لطفاً دوباره تلاش کنید."
+            "در ثبت سفارش خطایی رخ داد. دوباره تلاش کنید."
         )
         await callback.bot.send_message(
             chat_id=callback.from_user.id,
@@ -666,7 +666,7 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext):
             reply_markup=user_main_menu(callback.from_user.id),
         )
         await state.clear()
-        await callback.answer("خطا در ایجاد سفارش", show_alert=True)
+        await callback.answer("خطا در ثبت سفارش", show_alert=True)
         return
     
     await callback.answer()
@@ -751,7 +751,7 @@ async def wallet_pay_yes(callback: CallbackQuery, state: FSMContext):
             )
         except InsufficientBalanceError:
             await callback.answer(
-                "موجودی کیف پول کافی نیست. دوباره تلاش کنید.",
+                "موجودی کیف پول کافی نیست.",
                 show_alert=True,
             )
             return
@@ -875,7 +875,7 @@ async def back_to_custom_traffic(callback: CallbackQuery, state: FSMContext):
     """Return to custom traffic step from confirmation."""
     data = await state.get_data()
     if "days" not in data:
-        await callback.answer("اطلاعات سفارش یافت نشد.", show_alert=True)
+        await callback.answer("اطلاعات سفارش پیدا نشد.", show_alert=True)
         return
 
     await state.set_state(CustomPlanStates.waiting_for_traffic)
@@ -910,7 +910,7 @@ async def payment_back(message: Message, state: FSMContext):
     await state.clear()
     note = ""
     if order_id:
-        note = f"\n\n🔢 سفارش #{order_id} لغو شد."
+        note = f"\n\nسفارش #{order_id} لغو شد."
     if new_balance is not None:
         note += "\n" + get_text("wallet_refund_on_reject", balance=new_balance)
     await message.answer(
@@ -948,7 +948,7 @@ async def receive_receipt(message: Message, state: FSMContext):
 
         if order.status not in ("pending", "paid"):
             await message.answer(
-                "این سفارش قابل ارسال رسید نیست.",
+                "برای این سفارش نمی‌توان رسید فرستاد.",
                 reply_markup=user_main_menu(message.from_user.id),
             )
             await state.clear()
@@ -970,7 +970,7 @@ async def receive_receipt(message: Message, state: FSMContext):
                 )
             else:
                 await message.answer(
-                    "رسید قبلی شما هنوز در انتظار بررسی ادمین است.",
+                    "رسید قبلی شما هنوز در حال بررسی است.",
                     reply_markup=user_main_menu(message.from_user.id),
                 )
             await state.clear()
@@ -1004,8 +1004,8 @@ async def receive_receipt(message: Message, state: FSMContext):
         if wallet_debit > 0:
             difference = order.price - wallet_debit
             wallet_note = (
-                f"\n💳 از کیف پول: {wallet_debit:,} تومان"
-                f"\n💵 مبلغ رسید (باید واریز شده باشد): {difference:,} تومان"
+                f"\nاز کیف پول: {wallet_debit:,} تومان"
+                f"\nمبلغ رسید (باید واریز شده باشد): {difference:,} تومان"
             )
 
         admin_text = get_text(
@@ -1018,7 +1018,7 @@ async def receive_receipt(message: Message, state: FSMContext):
             price=order.price,
             wallet_note=wallet_note,
             renewal_note=(
-                f"\n🔄 تمدید اکانت #{order.renew_vpn_account_id}"
+                f"\nتمدید اکانت #{order.renew_vpn_account_id}"
                 if order.renew_vpn_account_id
                 else ""
             ),
@@ -1120,32 +1120,32 @@ async def send_accounts_list(event: Message | CallbackQuery) -> None:
             await bot.send_message(
                 chat_id=chat_id,
                 text=(
-                    "شما هنوز هیچ اکانتی ندارید.\n\n"
-                    "برای خرید اکانت جدید از منو 'خرید پلن' استفاده کنید."
+                    "هنوز اکانتی ندارید.\n\n"
+                    "برای خرید، از منو «خرید پلن» استفاده کنید."
                 ),
                 reply_markup=user_main_menu(user_id),
             )
             return
 
         now = datetime.utcnow()
-        text = "💳 اکانت‌های شما:\n\n"
+        text = "اکانت‌های شما:\n\n"
 
         for account in accounts:
             is_expired = account.expires_at < now
             days_left = (account.expires_at - now).days if not is_expired else 0
-            status = "🟢 فعال" if not is_expired and account.is_active else "🔴 منقضی شده"
+            status = "فعال" if not is_expired and account.is_active else "منقضی شده"
 
             text += (
-                f"🆔 شماره سفارش: #{account.order_id}\n"
-                f"📊 حجم: {account.traffic_limit_gb} گیگابایت\n"
-                f"⏱ روزهای باقیمانده: {days_left} روز\n"
-                f"📅 تاریخ انقضا: {account.expires_at.strftime('%Y-%m-%d')}\n"
+                f"شماره سفارش: #{account.order_id}\n"
+                f"حجم: {account.traffic_limit_gb} گیگابایت\n"
+                f"روزهای باقی‌مانده: {days_left} روز\n"
+                f"تاریخ انقضا: {account.expires_at.strftime('%Y-%m-%d')}\n"
                 f"وضعیت: {status}\n"
-                f"🔗 لینک اشتراک:\n{account.subscription_path}\n"
+                f"لینک اشتراک:\n{account.subscription_path}\n"
                 f"{'─' * 30}\n\n"
             )
 
-        text += "برای تمدید، دکمه «🔄 تمدید» زیر را بزنید."
+        text += "برای تمدید، دکمه «تمدید» زیر را بزنید."
         await bot.send_message(
             chat_id=chat_id,
             text=text,
@@ -1165,7 +1165,7 @@ async def my_accounts(message: Message, state: FSMContext):
         from app.utils.logger import logger
         logger.error("Error showing accounts for user %s: %s", message.from_user.id, e)
         await message.answer(
-            "خطایی رخ داد. لطفاً دوباره تلاش کنید.",
+            "خطایی رخ داد. دوباره تلاش کنید.",
             reply_markup=user_main_menu(message.from_user.id),
         )
 
@@ -1199,7 +1199,7 @@ async def renew_account_start(callback: CallbackQuery, state: FSMContext):
         account = result.scalar_one_or_none()
 
     if not account:
-        await callback.answer("اکانت یافت نشد!", show_alert=True)
+        await callback.answer("اکانت پیدا نشد.", show_alert=True)
         return
 
     await state.clear()
@@ -1207,7 +1207,7 @@ async def renew_account_start(callback: CallbackQuery, state: FSMContext):
     async with AsyncSessionLocal() as session:
         plans = await list_active_plans(session)
     await callback.message.edit_text(
-        f"🔄 تمدید اکانت سفارش #{account.order_id}\n\n"
+        f"تمدید اکانت سفارش #{account.order_id}\n\n"
         "یک پلن برای تمدید انتخاب کنید:",
         reply_markup=renew_plans_keyboard(plans, vpn_account_id),
     )
@@ -1223,7 +1223,7 @@ async def renew_select_plan(callback: CallbackQuery, state: FSMContext):
         plan = await get_plan(session, plan_id, active_only=True)
 
     if not plan:
-        await callback.answer("پلن یافت نشد!", show_alert=True)
+        await callback.answer("پلن پیدا نشد.", show_alert=True)
         return
 
     async with AsyncSessionLocal() as session:
@@ -1236,7 +1236,7 @@ async def renew_select_plan(callback: CallbackQuery, state: FSMContext):
         account = result.scalar_one_or_none()
 
     if not account:
-        await callback.answer("اکانت یافت نشد!", show_alert=True)
+        await callback.answer("اکانت پیدا نشد.", show_alert=True)
         return
 
     await state.update_data(
@@ -1271,7 +1271,7 @@ async def confirm_renew_order(callback: CallbackQuery, state: FSMContext):
     )
     if not can_proceed:
         await callback.answer(
-            f"لطفاً {remaining} ثانیه صبر کنید قبل از سفارش جدید.",
+            f"{remaining} ثانیه صبر کنید و بعد سفارش جدید ثبت کنید.",
             show_alert=True,
         )
         return
@@ -1296,7 +1296,7 @@ async def confirm_renew_order(callback: CallbackQuery, state: FSMContext):
             )
         )
         if not acc_result.scalar_one_or_none():
-            await callback.answer("اکانت یافت نشد!", show_alert=True)
+            await callback.answer("اکانت پیدا نشد.", show_alert=True)
             await state.clear()
             return
 

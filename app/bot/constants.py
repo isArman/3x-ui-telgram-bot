@@ -1,19 +1,19 @@
 """Reply-keyboard labels shared across handlers."""
 
-BACK_BUTTON = "🔙 بازگشت"
-CANCEL_BUTTON = "❌ لغو"
+BACK_BUTTON = "بازگشت"
+CANCEL_BUTTON = "لغو"
 
-BTN_BUY_PLAN = "📦 خرید پلن"
-BTN_CUSTOM_PLAN = "🎨 پلن سفارشی"
-BTN_MY_ORDERS = "📋 سفارش‌های من"
-BTN_MY_ACCOUNTS = "💳 اکانت‌های من"
-BTN_WALLET = "💰 کیف پول من"
-BTN_REFERRAL = "🎁 دعوت دوستان"
-BTN_TOP_UP = "💳 شارژ کیف پول"
-BTN_ADMIN_PANEL = "⚙️ پنل ادمین"
+BTN_BUY_PLAN = "خرید پلن"
+BTN_CUSTOM_PLAN = "پلن سفارشی"
+BTN_MY_ORDERS = "سفارش‌های من"
+BTN_MY_ACCOUNTS = "اکانت‌های من"
+BTN_WALLET = "کیف پول من"
+BTN_REFERRAL = "دعوت دوستان"
+BTN_TOP_UP = "شارژ کیف پول"
+BTN_ADMIN_PANEL = "پنل ادمین"
 
 # Main-menu actions only. Do NOT include CANCEL/BACK here: FSM "menu interrupt"
-# handlers match this set first, and would swallow ❌ لغو before real cancel
+# handlers match this set first, and would swallow لغو before real cancel
 # handlers (e.g. admin waiting_for_subscription showed "use cancel" instead of
 # cancelling).
 MAIN_MENU_BUTTONS = frozenset(
@@ -40,9 +40,10 @@ ORDER_STATUS_LABELS = {
 }
 
 CONFIGS_MENU_TEXT = (
-    "🗂 مدیریت کانفیگ‌های پلن\n\n"
+    "مدیریت کانفیگ‌های پلن\n\n"
     "کانفیگ‌ها (لینک subscription یا vless://) را به هر پلن اضافه کنید.\n"
-    "پس از تایید پرداخت، یک کانفیگ آزاد به کاربر ارسال می‌شود."
+    "بعد از تایید پرداخت، یک کانفیگ آزاد به کاربر ارسال می‌شود."
 )
 
-ADMIN_MENU_TEXT = "⚙️ پنل ادمین\n\nیک گزینه را انتخاب کنید:"
+ADMIN_MENU_TEXT = "پنل ادمین\n\nیک گزینه را انتخاب کنید:"
+
