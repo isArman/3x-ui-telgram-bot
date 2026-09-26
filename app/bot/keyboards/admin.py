@@ -59,6 +59,7 @@ def admin_menu_keyboard() -> InlineKeyboardMarkup:
     builder.row(InlineKeyboardButton(text="مدیریت کانفیگ‌ها", callback_data="admin:configs"))
     builder.row(InlineKeyboardButton(text="داشبورد", callback_data="admin:dashboard"))
     builder.row(InlineKeyboardButton(text="پرداخت‌های در انتظار", callback_data="admin:pending"))
+    builder.row(InlineKeyboardButton(text="پیام همگانی", callback_data="admin:broadcast"))
     return builder.as_markup()
 
 

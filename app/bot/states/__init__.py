@@ -44,3 +44,4 @@ class AdminStates(StatesGroup):
     waiting_for_plan_edit_value = State()
     waiting_for_pricing_per_day = State()
     waiting_for_pricing_per_gb = State()
+    waiting_for_broadcast_text = State()
