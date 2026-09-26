@@ -137,6 +137,18 @@ def accounts_list_keyboard(accounts) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def usage_alert_keyboard(vpn_account_id: int) -> InlineKeyboardMarkup:
+    """One-tap renew action attached to expiry / low-traffic alerts."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text="تمدید اکانت",
+            callback_data=f"renew_account:{vpn_account_id}",
+        )
+    )
+    return builder.as_markup()
+
+
 def renew_plans_keyboard(plans: List[Dict[str, Any]], vpn_account_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for plan in plans:

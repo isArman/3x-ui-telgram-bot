@@ -1,11 +1,23 @@
+"""Periodic expiry and low-traffic alerts.
+
+Both alerts are actionable: the message carries a "تمدید اکانت" button wired
+to the normal renewal flow (callback `renew_account:<id>`), so a user can
+renew straight from the alert.
+"""
+
 from datetime import datetime, timedelta
 
 from aiogram import Bot
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.bot.keyboards.user import usage_alert_keyboard
 from app.database.models import VPNAccount
-from app.services.panel_settings import get_panel_settings, is_auto_provisioning_ready, xui_client_for_panel
+from app.services.panel_settings import (
+    get_panel_settings,
+    is_auto_provisioning_ready,
+    xui_client_for_panel,
+)
 from app.services.traffic_usage import (
     format_gb,
     is_low_traffic,
@@ -14,18 +26,20 @@ from app.services.traffic_usage import (
 )
 from app.utils.logger import logger
 
+# Alert when this many days (or fewer) remain before expiry.
+EXPIRY_WARNING_DAYS = 3
+
 
 async def check_expiring_accounts(session: AsyncSession, bot: Bot) -> int:
-    """Check for accounts expiring soon and send notifications."""
-
+    """Alert accounts close to expiry, once per account, with a renew button."""
     now = datetime.utcnow()
-    three_days_ahead = now + timedelta(days=3)
+    cutoff = now + timedelta(days=EXPIRY_WARNING_DAYS)
 
     result = await session.execute(
         select(VPNAccount).where(
             VPNAccount.is_active == True,
             VPNAccount.expires_at > now,
-            VPNAccount.expires_at <= three_days_ahead,
+            VPNAccount.expires_at <= cutoff,
             VPNAccount.expiry_notified == False,
         )
     )
@@ -35,43 +49,54 @@ async def check_expiring_accounts(session: AsyncSession, bot: Bot) -> int:
 
     for account in accounts:
         try:
-            days_left = (account.expires_at - now).days
+            days_left = max((account.expires_at - now).days, 0)
+
+            if days_left <= 0:
+                lead = "اکانت شما امروز منقضی می‌شود."
+            elif days_left == 1:
+                lead = "اکانت شما ۱ روز دیگر منقضی می‌شود."
+            else:
+                lead = f"اکانت شما {days_left} روز دیگر منقضی می‌شود."
 
             message = (
-                f"اکانت شما نزدیک انقضاست.\n\n"
-                f"اکانت شما (سفارش #{account.order_id}) در {days_left} روز دیگر منقضی می‌شود.\n\n"
+                f"{lead}\n\n"
+                f"شماره سفارش: #{account.order_id}\n"
                 f"تاریخ انقضا: {account.expires_at.strftime('%Y-%m-%d')}\n"
                 f"حجم: {account.traffic_limit_gb} گیگابایت\n\n"
-                f"برای تمدید از «اکانت‌های من» استفاده کنید."
+                "با دکمه زیر می‌توانید همین‌جا تمدید کنید."
             )
 
-            await bot.send_message(chat_id=account.user_id, text=message)
+            await bot.send_message(
+                chat_id=account.user_id,
+                text=message,
+                reply_markup=usage_alert_keyboard(account.id),
+            )
 
             account.expiry_notified = True
             notified_count += 1
 
             logger.info(
-                "Sent expiry notification for account %s to user %s",
+                "Sent expiry alert for account %s to user %s",
                 account.id,
                 account.user_id,
             )
 
         except Exception as exc:
             logger.error(
-                "Failed to send expiry notification for account %s: %s",
+                "Failed to send expiry alert for account %s: %s",
                 account.id,
                 exc,
             )
 
     if notified_count > 0:
         await session.commit()
-        logger.info("Sent %s expiry notifications", notified_count)
+        logger.info("Sent %s expiry alerts", notified_count)
 
     return notified_count
 
 
 async def check_low_traffic_accounts(session: AsyncSession, bot: Bot) -> int:
-    """Notify users when panel traffic drops below 10% remaining."""
+    """Alert accounts whose remaining panel traffic is below the threshold."""
 
     panel = await get_panel_settings(session)
     if not is_auto_provisioning_ready(panel):
@@ -111,21 +136,25 @@ async def check_low_traffic_accounts(session: AsyncSession, bot: Bot) -> int:
                     remaining_pct = remaining_traffic_percent(total_bytes, used_bytes)
 
                     message = (
-                        f"حجم اکانت شما در حال تمام شدن است.\n\n"
-                        f"اکانت شما (سفارش #{account.order_id}) کمتر از ۱۰٪ حجم باقی‌مانده دارد.\n\n"
+                        "حجم اکانت شما در حال تمام شدن است.\n\n"
+                        f"شماره سفارش: #{account.order_id}\n"
                         f"حجم کل: {format_gb(total_bytes)} GB\n"
                         f"مصرف شده: {format_gb(used_bytes)} GB\n"
                         f"باقی‌مانده: {format_gb(remaining_bytes)} GB "
-                        f"(~{remaining_pct:.1f}%)\n\n"
-                        f"برای تمدید از «اکانت‌های من» استفاده کنید."
+                        f"(حدود {remaining_pct:.0f}٪)\n\n"
+                        "با دکمه زیر می‌توانید همین‌جا تمدید کنید."
                     )
 
-                    await bot.send_message(chat_id=account.user_id, text=message)
+                    await bot.send_message(
+                        chat_id=account.user_id,
+                        text=message,
+                        reply_markup=usage_alert_keyboard(account.id),
+                    )
                     account.traffic_low_notified = True
                     notified_count += 1
 
                     logger.info(
-                        "Sent low-traffic notification for account %s to user %s",
+                        "Sent low-traffic alert for account %s to user %s",
                         account.id,
                         account.user_id,
                     )
@@ -137,11 +166,11 @@ async def check_low_traffic_accounts(session: AsyncSession, bot: Bot) -> int:
                         exc,
                     )
     except Exception as exc:
-        logger.error("Low-traffic notification run failed: %s", exc)
+        logger.error("Low-traffic alert run failed: %s", exc)
         return 0
 
     if notified_count > 0:
         await session.commit()
-        logger.info("Sent %s low-traffic notifications", notified_count)
+        logger.info("Sent %s low-traffic alerts", notified_count)
 
     return notified_count
