@@ -21,6 +21,14 @@ def _gb_to_bytes(gb: int) -> int:
     return gb * 1024 * 1024 * 1024
 
 
+def _bulk_adjust_skipped(result: dict, email: str) -> bool:
+    """True when the panel reported this email as skipped by bulkAdjust."""
+    for entry in result.get("skipped") or []:
+        if isinstance(entry, dict) and entry.get("email") == email:
+            return True
+    return False
+
+
 async def resolve_live_inbound_ids(
     client: XUIClient,
     settings: PanelSettings,
@@ -98,8 +106,12 @@ async def provision_subscription_for_order(
     existing_account: VPNAccount | None = None,
 ) -> Optional[str]:
     """
-    Create or update a 3x-ui client and return the subscription URL.
-    For renewals, extends expiry and traffic from current panel/DB values.
+    Create or extend a 3x-ui client and return the subscription URL.
+
+    New client: created with the order's quota/expiry.
+    Existing client (renewal or repeat purchase): extended with an atomic
+    server-side delta via bulkAdjust, which also re-enables a client the panel
+    had auto-disabled for being depleted.
     """
     email = panel_client_email(user)
     comment = build_client_comment(user)
@@ -119,49 +131,43 @@ async def provision_subscription_for_order(
             existing_client = await client.get_client(email)
             client_data = (existing_client or {}).get("client") or {}
 
-            # Always stack onto an existing panel client (same Telegram email).
-            # Replacing quota on a second "new" purchase wiped remaining traffic.
             if client_data:
-                current_expiry = int(client_data.get("expiryTime") or 0)
-                expiry_ms = max(now_ms, current_expiry) + add_ms
-                total_bytes = int(client_data.get("totalGB") or 0) + add_bytes
-                # #region agent log
-                from app.utils.debug_ndjson import agent_log
-
-                agent_log(
-                    "D",
-                    "xui_provisioning.py:provision",
-                    "extending existing panel client",
-                    {
-                        "order_id": order.id,
-                        "is_renewal": bool(existing_account),
-                        "add_gb": order.traffic_gb,
-                    },
-                    run_id="post-fix",
+                # Extend rather than reset: bulkAdjust is an atomic
+                # read-modify-write on the panel (no client-side race) and
+                # re-enables a client that was auto-disabled for being depleted.
+                adjusted = await client.bulk_adjust(
+                    [email],
+                    add_days=order.days,
+                    add_bytes=add_bytes,
                 )
-                # #endregion
+                if _bulk_adjust_skipped(adjusted, email):
+                    logger.error(
+                        "bulkAdjust skipped client %s for order %s: %s",
+                        email,
+                        order.id,
+                        adjusted.get("skipped"),
+                    )
+                    return None
+                # Ensure inbound membership matches the selected set.
+                detail = await client.sync_client_inbounds(email, inbound_ids)
+                logger.info(
+                    "Extended 3x-ui client %s for order %s (+%s days, +%s GB)",
+                    email,
+                    order.id,
+                    order.days,
+                    order.traffic_gb,
+                )
             else:
-                expiry_ms = now_ms + add_ms
-                total_bytes = add_bytes
-                # #region agent log
-                from app.utils.debug_ndjson import agent_log
-
-                agent_log(
-                    "D",
-                    "xui_provisioning.py:provision",
-                    "creating fresh panel client",
-                    {"order_id": order.id},
-                    run_id="post-fix",
+                detail = await client.add_client(
+                    email,
+                    inbound_ids,
+                    add_bytes,
+                    now_ms + add_ms,
+                    comment,
                 )
-                # #endregion
-
-            detail = await client.upsert_client(
-                email=email,
-                inbound_ids=inbound_ids,
-                total_bytes=total_bytes,
-                expiry_ms=expiry_ms,
-                comment=comment,
-            )
+                logger.info(
+                    "Created 3x-ui client %s for order %s", email, order.id
+                )
     except XUIError as exc:
         logger.error("3x-ui provisioning failed for order %s: %s", order.id, exc)
         return None

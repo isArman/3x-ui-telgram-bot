@@ -17,6 +17,20 @@ class XUIError(Exception):
 DEFAULT_CLIENT_LIMIT_IP = 1
 
 
+_NOT_FOUND_HINTS = (
+    "record not found",
+    "not found",
+    "no such",
+    "does not exist",
+)
+
+
+def _msg_is_not_found(msg: str) -> bool:
+    """True when a panel message means "this client does not exist"."""
+    lowered = (msg or "").lower()
+    return any(hint in lowered for hint in _NOT_FOUND_HINTS)
+
+
 def prepare_client_update_payload(
     existing_detail: dict[str, Any],
     *,
@@ -157,16 +171,33 @@ class XUIClient:
         return data.get("obj") or []
 
     async def get_client(self, email: str) -> Optional[dict[str, Any]]:
+        """
+        Fetch one client. Returns None only when the panel explicitly reports it
+        is missing; any other failure raises XUIError so a transient panel error
+        can never be mistaken for "client does not exist" (which would create a
+        duplicate client).
+
+        The panel answers 200 + success:false for both a missing client (gorm's
+        "record not found") and real errors, so the message is inspected to tell
+        the two apart.
+        """
         assert self._client
         resp = await self._client.get(
             self._url(f"/panel/api/clients/get/{email}")
         )
         if resp.status_code == 404:
             return None
-        resp.raise_for_status()
-        data = resp.json()
-        if not data.get("success"):
-            return None
+        try:
+            data = resp.json()
+        except ValueError:
+            raise XUIError(
+                f"Panel returned non-JSON for client lookup (HTTP {resp.status_code})"
+            )
+        if data.get("success") is False:
+            msg = str(data.get("msg") or "")
+            if _msg_is_not_found(msg):
+                return None
+            raise XUIError(msg or f"Failed to fetch client {email}")
         return data.get("obj")
 
     async def list_clients(self) -> list[dict[str, Any]]:
@@ -291,35 +322,51 @@ class XUIClient:
 
         return await self.sync_client_inbounds(email, inbound_ids)
 
-    async def upsert_client(
+    async def bulk_adjust(
         self,
-        email: str,
-        inbound_ids: list[int],
-        total_bytes: int,
-        expiry_ms: int,
-        comment: str,
+        emails: list[str],
         *,
-        limit_ip: int = DEFAULT_CLIENT_LIMIT_IP,
+        add_days: int = 0,
+        add_bytes: int = 0,
     ) -> dict[str, Any]:
-        existing = await self.get_client(email)
-        if existing and existing.get("client"):
-            client = prepare_client_update_payload(
-                existing,
-                email=email,
-                total_bytes=total_bytes,
-                expiry_ms=expiry_ms,
-                comment=comment,
-                limit_ip=limit_ip,
-            )
-            return await self.update_client(email, client, inbound_ids)
-        return await self.add_client(
-            email,
-            inbound_ids,
-            total_bytes,
-            expiry_ms,
-            comment,
-            limit_ip=limit_ip,
+        """
+        Shift expiry and/or quota for existing clients atomically on the panel.
+
+        POST /panel/api/clients/bulkAdjust applies addDays/addBytes as deltas in
+        one server-side read-modify-write, so there is no client-side
+        read-modify-write race. The panel also re-enables a client that was
+        auto-disabled solely because it was depleted once the adjustment lifts
+        it out of depletion, and skips the expiry/traffic field when it is
+        unlimited (0) instead of narrowing it.
+
+        Returns {"adjusted": int, "skipped": [{"email", "reason"}, ...]}.
+        """
+        if not emails:
+            return {"adjusted": 0, "skipped": []}
+        if add_days == 0 and add_bytes == 0:
+            raise ValueError("no adjustment specified")
+
+        payload: dict[str, Any] = {
+            "emails": list(emails),
+            "addDays": int(add_days),
+            "addBytes": int(add_bytes),
+        }
+
+        assert self._client
+        token = await self._csrf_token()
+        resp = await self._client.post(
+            self._url("/panel/api/clients/bulkAdjust"),
+            json=payload,
+            headers={"X-CSRF-Token": token},
         )
+        resp.raise_for_status()
+        data = resp.json()
+        if not data.get("success"):
+            raise XUIError(data.get("msg") or "Failed to bulk-adjust clients")
+        obj = data.get("obj") or {}
+        if not isinstance(obj, dict):
+            raise XUIError("Unexpected bulkAdjust payload")
+        return obj
 
     async def enforce_limit_ip(
         self,
