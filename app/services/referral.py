@@ -5,7 +5,7 @@ from __future__ import annotations
 import secrets
 import string
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import Order, User
@@ -13,6 +13,8 @@ from app.services.wallet import credit_balance
 
 DISCOUNT_PERCENT = 15
 CASHBACK_PERCENT = 20
+# Share of the level-1 cashback that also goes to the referrer's referrer.
+CASHBACK_LEVEL2_PERCENT = 5
 _ALPHABET = string.ascii_lowercase + string.digits
 
 
@@ -187,7 +189,8 @@ async def grant_referral_cashback(
 ) -> tuple[int, int] | None:
     """
     Credit referrer 20% of original_price once for a discounted first purchase.
-    Returns (referrer_id, cashback_amount) or None if not granted.
+
+    Returns (referrer_id, amount) if any credit was made.
 
     The cashback flag is claimed with a conditional UPDATE first, so two
     concurrent approvals of the same order can never credit the referrer twice.
@@ -243,6 +246,76 @@ async def grant_referral_cashback(
     order.referral_cashback_paid = True
     await session.flush()
     return referrer_id, cashback
+
+
+async def grant_referral_cashback_level2(
+    session: AsyncSession, order: Order
+) -> tuple[int, int] | None:
+    """
+    Credit the referrer's referrer a smaller share of the same order.
+
+    Returns (user_id, amount) if a level-2 credit was made.
+    """
+    if order.referral_cashback_level2_paid:
+        return None
+    if not order.referral_discount_applied:
+        return None
+    if order.renew_vpn_account_id:
+        return None
+
+    buyer_result = await session.execute(select(User).where(User.id == order.user_id))
+    buyer = buyer_result.scalar_one_or_none()
+    if not buyer or not buyer.referred_by_user_id:
+        order.referral_cashback_level2_paid = True
+        await session.flush()
+        return None
+
+    level1_result = await session.execute(
+        select(User).where(User.id == buyer.referred_by_user_id)
+    )
+    level1 = level1_result.scalar_one_or_none()
+    if not level1 or not level1.referred_by_user_id:
+        order.referral_cashback_level2_paid = True
+        await session.flush()
+        return None
+
+    # Atomically claim this order's level-2 cashback exactly once.
+    claim = await session.execute(
+        update(Order)
+        .where(
+            Order.id == order.id,
+            Order.referral_cashback_level2_paid.is_(False),
+        )
+        .values(referral_cashback_level2_paid=True)
+    )
+    if claim.rowcount != 1:
+        order.referral_cashback_level2_paid = True
+        return None
+
+    # Only one level-2 credit ever per buyer (across orders).
+    prior = await session.execute(
+        select(Order.id)
+        .where(
+            Order.user_id == order.user_id,
+            Order.referral_cashback_level2_paid.is_(True),
+            Order.id != order.id,
+        )
+        .limit(1)
+    )
+    if prior.scalar_one_or_none() is not None:
+        await session.flush()
+        return None
+
+    base = int(order.original_price if order.original_price is not None else order.price)
+    amount = base * CASHBACK_LEVEL2_PERCENT // 100
+    level2_id = int(level1.referred_by_user_id)
+    if amount < 1 or level2_id == order.user_id:
+        await session.flush()
+        return None
+
+    await credit_balance(session, level2_id, amount)
+    await session.flush()
+    return level2_id, amount
 
 
 def referral_link(bot_username: str, code: str) -> str:

@@ -19,8 +19,13 @@ from app.bot.menu_dispatch import dispatch_main_menu
 from sqlalchemy import func, select
 
 from app.bot.keyboards.admin import (
+    admin_broadcast_keyboard,
     admin_cancel_keyboard,
     admin_menu_keyboard,
+    admin_promo_keyboard,
+    admin_promo_kind_keyboard,
+    admin_promo_list_keyboard,
+    admin_user_keyboard,
     configs_menu_keyboard,
     plan_select_keyboard,
 )
@@ -37,6 +42,22 @@ from app.services.order_fulfillment import (
 from app.services.panel_settings import PROVISIONING_AUTO, get_panel_settings
 from app.services.wallet import credit_balance
 from app.services.plans_catalog import get_plan, list_active_plans, list_all_plans
+from app.services.promocodes import (
+    PROMO_KIND_DAYS,
+    PROMO_KIND_GB,
+    PROMO_KIND_PERCENT,
+    create_promo,
+    delete_promo,
+    describe_promo,
+    get_promo,
+    list_promos,
+    set_promo_active,
+)
+from app.services.users import (
+    find_user,
+    get_user_summary,
+    set_user_blocked,
+)
 from app.utils.logger import logger
 from app.utils.validation import is_valid_config_text
 
@@ -1017,7 +1038,466 @@ async def show_payment_history(message: Message):
         await message.answer(text)
 
 
-# --- Broadcast ---
+# --- Admin: user editor ----------------------------------------------------
+
+
+@router.callback_query(F.data == "admin:users")
+async def admin_users_menu(callback: CallbackQuery, state: FSMContext):
+    """Open the user editor."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("دسترسی ندارید.", show_alert=True)
+        return
+
+    await state.set_state(AdminStates.waiting_for_user_lookup)
+    await callback.answer()
+    await callback.message.answer(
+        "شماره کاربر یا نام کاربری او را بفرستید (یا «لغو»).",
+        reply_markup=admin_cancel_keyboard(),
+    )
+
+
+@router.message(AdminStates.waiting_for_user_lookup)
+async def admin_user_lookup_input(message: Message, state: FSMContext):
+    """Take the customer id/username the admin typed."""
+    if not is_admin(message.from_user.id):
+        return
+
+    text = (message.text or "").strip()
+    if text == CANCEL_BUTTON:
+        await state.clear()
+        await message.answer(
+            get_text("operation_cancelled"), reply_markup=ReplyKeyboardRemove()
+        )
+        return
+
+    await state.clear()
+    await _show_user_card(message, text)
+
+
+@router.message(AdminStates.waiting_for_user_credit)
+async def admin_user_credit(message: Message, state: FSMContext):
+    """Top up a customer's wallet."""
+    if not is_admin(message.from_user.id):
+        return
+
+    data = await state.get_data()
+    target_id = data.get("admin_target_user_id")
+    if not target_id:
+        await message.answer(get_text("error_general"))
+        await state.clear()
+        return
+
+    try:
+        amount = int((message.text or "").replace(",", "").replace("،", "").strip())
+    except (TypeError, ValueError):
+        await message.answer(get_text("error_invalid_number"))
+        return
+
+    if amount < 1:
+        await message.answer(get_text("error_invalid_number"))
+        return
+
+    async with AsyncSessionLocal() as session:
+        await credit_balance(session, int(target_id), amount)
+        await session.commit()
+        summary = await get_user_summary(session, int(target_id))
+
+    await state.clear()
+    await message.answer(
+        get_text("admin_user_credited", amount=amount),
+        reply_markup=admin_user_keyboard(
+            int(target_id), blocked=bool(summary.user.is_blocked)
+        )
+        if summary
+        else None,
+    )
+
+
+@router.message(F.text == "/user")
+async def admin_user_lookup(message: Message, state: FSMContext):
+    """Look a customer up by id or username."""
+    if not is_admin(message.from_user.id):
+        return
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        await message.answer(get_text("admin_user_not_found"))
+        return
+    await _show_user_card(message, parts[1].strip())
+
+
+async def _show_user_card(message: Message, query: str) -> None:
+    async with AsyncSessionLocal() as session:
+        user = await find_user(session, query)
+        if not user:
+            await message.answer(get_text("admin_user_not_found"))
+            return
+        summary = await get_user_summary(session, user.id)
+        blocked = bool(summary.user.is_blocked) if summary else False
+        user_id = user.id
+
+    await message.answer(
+        get_text(
+            "admin_user_summary",
+            name=summary.display_name if summary else str(user_id),
+            user_id=user_id,
+            balance=summary.balance if summary else 0,
+            total_orders=summary.total_orders if summary else 0,
+            completed=summary.completed_orders if summary else 0,
+            spent=summary.total_spent if summary else 0,
+            accounts=summary.active_accounts if summary else 0,
+            referrer=summary.referred_by if summary else "—",
+            referrals=summary.referrals if summary else 0,
+            blocked="بله" if blocked else "خیر",
+        ),
+        reply_markup=admin_user_keyboard(user_id, blocked=blocked),
+    )
+
+
+@router.callback_query(F.data.startswith("user:toggle_block:"))
+async def admin_user_toggle_block(callback: CallbackQuery):
+    """Block or unblock a customer."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("دسترسی ندارید.", show_alert=True)
+        return
+
+    user_id = int(callback.data.split(":")[2])
+    async with AsyncSessionLocal() as session:
+        user = await set_user_blocked(session, user_id, True)
+        if not user:
+            await callback.answer(get_text("admin_user_not_found"), show_alert=True)
+            return
+        if user.is_blocked:
+            await set_user_blocked(session, user_id, False)
+            blocked = False
+        else:
+            blocked = True
+
+    await callback.answer(
+        get_text("admin_user_blocked" if blocked else "admin_user_unblocked")
+    )
+    await callback.message.edit_reply_markup(
+        reply_markup=admin_user_keyboard(user_id, blocked=blocked)
+    )
+
+
+@router.callback_query(F.data.startswith("user:credit:"))
+async def admin_user_credit_start(callback: CallbackQuery, state: FSMContext):
+    """Ask the admin for the amount to credit."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("دسترسی ندارید.", show_alert=True)
+        return
+
+    user_id = int(callback.data.split(":")[2])
+    await state.update_data(admin_target_user_id=user_id)
+    await state.set_state(AdminStates.waiting_for_user_credit)
+    await callback.answer()
+    await callback.message.answer(get_text("admin_credit_prompt"))
+
+
+@router.callback_query(F.data.startswith("user:renew:"))
+async def admin_user_renew(callback: CallbackQuery):
+    """Renew a customer's account for free (admin gift)."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("دسترسی ندارید.", show_alert=True)
+        return
+
+    user_id = int(callback.data.split(":")[2])
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(VPNAccount)
+            .where(VPNAccount.user_id == user_id, VPNAccount.is_active.is_(True))
+            .order_by(VPNAccount.created_at.desc())
+            .limit(1)
+        )
+        account = result.scalar_one_or_none()
+        if not account:
+            await callback.answer("اکانت فعالی برای این کاربر نیست.", show_alert=True)
+            return
+
+        from app.services.renewal import extend_vpn_account
+
+        order = Order(
+            user_id=user_id,
+            days=30,
+            traffic_gb=0,
+            price=0,
+            original_price=0,
+            renew_vpn_account_id=account.id,
+            status="completed",
+        )
+        session.add(order)
+        await session.flush()
+        await extend_vpn_account(session, account, order)
+        await session.commit()
+        await session.refresh(account)
+
+    await callback.answer("تمدید انجام شد.")
+    await callback.message.answer(
+        f"تمدید {account.order_id} انجام شد.\n"
+        f"انقضای جدید: {account.expires_at:%Y-%m-%d}"
+    )
+
+
+# --- Admin: promo codes ----------------------------------------------------
+
+
+@router.callback_query(F.data == "admin:promos")
+async def admin_promos_menu(callback: CallbackQuery):
+    """List the promo codes."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("دسترسی ندارید.", show_alert=True)
+        return
+
+    async with AsyncSessionLocal() as session:
+        promos = await list_promos(session)
+
+    await callback.answer()
+    if not promos:
+        await callback.message.answer(
+            "هنوز کد پرومویی ساخته نشده است.",
+            reply_markup=admin_promo_keyboard(),
+        )
+        return
+
+    await callback.message.answer(
+        get_text(
+            "admin_promo_list",
+            list="\n".join(f"• {describe_promo(p)}" for p in promos),
+        ),
+        reply_markup=admin_promo_list_keyboard(promos),
+    )
+
+
+@router.callback_query(F.data == "promo:new")
+async def admin_promo_new(callback: CallbackQuery, state: FSMContext):
+    """Start creating a promo code."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("دسترسی ندارید.", show_alert=True)
+        return
+
+    await state.set_state(AdminStates.waiting_for_promo_code)
+    await callback.answer()
+    await callback.message.answer(
+        get_text("admin_promo_prompt"),
+        reply_markup=admin_cancel_keyboard(),
+    )
+
+
+@router.message(AdminStates.waiting_for_promo_code)
+async def admin_promo_code_input(message: Message, state: FSMContext):
+    """Take the promo code, then ask for its kind."""
+    if not is_admin(message.from_user.id):
+        return
+
+    code = (message.text or "").strip().upper()
+    if not code:
+        await message.answer(get_text("admin_promo_prompt"))
+        return
+
+    await state.update_data(promo_code=code)
+    await state.set_state(AdminStates.waiting_for_promo_value)
+    await message.answer(
+        get_text("admin_promo_kind_prompt"),
+        reply_markup=admin_promo_kind_keyboard(),
+    )
+
+
+@router.callback_query(F.data.startswith("promo:kind:"))
+async def admin_promo_kind(callback: CallbackQuery, state: FSMContext):
+    """Remember the promo kind and ask for the value."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("دسترسی ندارید.", show_alert=True)
+        return
+
+    kind = callback.data.split(":")[2]
+    if kind not in (PROMO_KIND_DAYS, PROMO_KIND_GB, PROMO_KIND_PERCENT):
+        await callback.answer("نوع نامعتبر است.", show_alert=True)
+        return
+
+    data = await state.get_data()
+    if not data.get("promo_code"):
+        await callback.answer("ابتدا کد را وارد کنید.", show_alert=True)
+        return
+
+    await state.update_data(promo_kind=kind)
+    await state.set_state(AdminStates.waiting_for_promo_value)
+    await callback.answer()
+    await callback.message.answer(
+        get_text("admin_promo_value_prompt"),
+        reply_markup=admin_cancel_keyboard(),
+    )
+
+
+@router.message(AdminStates.waiting_for_promo_value)
+async def admin_promo_value(message: Message, state: FSMContext):
+    """Create the promo code."""
+    if not is_admin(message.from_user.id):
+        return
+
+    data = await state.get_data()
+    code = data.get("promo_code")
+    kind = data.get("promo_kind")
+    if not code or not kind:
+        await message.answer(get_text("error_general"))
+        await state.clear()
+        return
+
+    try:
+        value = int((message.text or "").strip())
+    except (TypeError, ValueError):
+        await message.answer(get_text("error_invalid_number"))
+        return
+
+    try:
+        async with AsyncSessionLocal() as session:
+            promo = await create_promo(
+                session,
+                code=code,
+                kind=kind,
+                value=value,
+                created_by=message.from_user.id,
+            )
+            await session.commit()
+            effect = describe_promo(promo)
+    except ValueError as exc:
+        await message.answer(str(exc))
+        return
+
+    await state.clear()
+    await message.answer(
+        get_text("admin_promo_created", code=promo.code, effect=effect),
+        reply_markup=admin_promo_keyboard(),
+    )
+
+
+@router.callback_query(F.data.startswith("promo:toggle:"))
+async def admin_promo_toggle(callback: CallbackQuery):
+    """Enable or disable a promo code."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("دسترسی ندارید.", show_alert=True)
+        return
+
+    promo_id = int(callback.data.split(":")[2])
+    async with AsyncSessionLocal() as session:
+        from sqlalchemy import select as sa_select
+
+        from app.database.models import PromoCode
+
+        result = await session.execute(
+            sa_select(PromoCode).where(PromoCode.id == promo_id)
+        )
+        promo = result.scalar_one_or_none()
+        if not promo:
+            await callback.answer(get_text("admin_promo_not_found"), show_alert=True)
+            return
+        await set_promo_active(session, promo, not promo.is_active)
+        state_label = "فعال" if promo.is_active else "خاموش"
+
+    await callback.answer(get_text("admin_promo_toggled", code=promo.code, state=state_label))
+
+
+# --- Admin: maintenance / backup -------------------------------------------
+
+
+@router.callback_query(F.data == "admin:maintenance")
+async def admin_maintenance_toggle(callback: CallbackQuery):
+    """Turn the shop's maintenance mode on or off."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("دسترسی ندارید.", show_alert=True)
+        return
+
+    from app.services.bot_settings import is_maintenance, set_bot_settings
+
+    async with AsyncSessionLocal() as session:
+        current = await is_maintenance(session)
+        await set_bot_settings(session, maintenance_mode=not current)
+
+    await callback.answer()
+    await callback.message.answer(
+        get_text("admin_maintenance_off" if current else "admin_maintenance_on")
+    )
+
+
+@router.callback_query(F.data == "admin:backup")
+async def admin_backup(callback: CallbackQuery):
+    """Send the admin a copy of the database."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("دسترسی ندارید.", show_alert=True)
+        return
+
+    from app.services.backup import create_backup_bytes
+
+    await callback.answer("در حال ساخت پشتیبان…")
+    try:
+        payload = await create_backup_bytes()
+    except Exception as exc:
+        logger.error("Database backup failed: %s", exc)
+        await callback.message.answer(
+            get_text("admin_backup_failed", error=exc)
+        )
+        return
+
+    await callback.message.answer(
+        get_text("admin_backup_ready"),
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    await callback.bot.send_document(
+        chat_id=callback.from_user.id,
+        document=(
+            "db-backup.sqlite3",
+            payload,
+            "application/x-sqlite3",
+        ),
+    )
+
+
+# --- Broadcast: preview / edit / per-user ----------------------------------
+
+
+@router.callback_query(F.data == "broadcast:preview")
+async def admin_broadcast_preview(callback: CallbackQuery, state: FSMContext):
+    """Show the pending broadcast before it goes out."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("دسترسی ندارید.", show_alert=True)
+        return
+
+    data = await state.get_data()
+    text = data.get("broadcast_text")
+    if not text:
+        await callback.answer("متن پیام خالی است.", show_alert=True)
+        return
+
+    await callback.answer()
+    await callback.message.answer(
+        get_text("admin_broadcast_preview", text=text),
+        reply_markup=admin_cancel_keyboard(),
+    )
+
+
+@router.callback_query(F.data == "broadcast:edit_last")
+async def admin_broadcast_edit_last(callback: CallbackQuery):
+    """Edit the messages of the last broadcast."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("دسترسی ندارید.", show_alert=True)
+        return
+
+    from app.services.broadcast import edit_last_broadcast, last_broadcast
+
+    async with AsyncSessionLocal() as session:
+        broadcast = await last_broadcast(session)
+        if not broadcast:
+            await callback.answer("هنوز پیامی ارسال نشده است.", show_alert=True)
+            return
+        edited = await edit_last_broadcast(
+            callback.bot,
+            session,
+            broadcast.text,
+            use_html=broadcast.use_html,
+        )
+
+    await callback.answer(
+        get_text("admin_broadcast_edited", count=edited), show_alert=True
+    )
 
 
 async def _send_broadcast_prompt(message: Message, state: FSMContext) -> None:
@@ -1032,7 +1512,7 @@ async def _send_broadcast_prompt(message: Message, state: FSMContext) -> None:
         f"تعداد کاربران: {len(recipients)}\n\n"
         "متن پیام را بفرستید. همین متن برای همه ارسال می‌شود.\n"
         f"برای انصراف: «{CANCEL_BUTTON}»",
-        reply_markup=admin_cancel_keyboard(),
+        reply_markup=admin_broadcast_keyboard(),
     )
 
 
@@ -1073,13 +1553,32 @@ async def admin_broadcast_send(message: Message, state: FSMContext):
         await message.answer("متن پیام خالی است. یک متن بفرستید.")
         return
 
-    from app.services.broadcast import broadcast_message
+    from app.services.broadcast import (
+        BROADCAST_TARGET_ALL,
+        create_broadcast,
+        send_broadcast,
+    )
+
+    data = await state.get_data()
+    use_html = bool(data.get("broadcast_html"))
+    target = data.get("broadcast_target") or BROADCAST_TARGET_ALL
+    target_chat_id = data.get("broadcast_target_chat_id")
+
+    async with AsyncSessionLocal() as session:
+        broadcast = await create_broadcast(
+            session,
+            text,
+            use_html=use_html,
+            target=target,
+            target_chat_id=target_chat_id,
+            created_by=message.from_user.id,
+        )
 
     await state.clear()
     wait_msg = await message.answer("در حال ارسال…")
 
     async with AsyncSessionLocal() as session:
-        result = await broadcast_message(message.bot, session, text)
+        result = await send_broadcast(message.bot, session, broadcast)
 
     try:
         await wait_msg.edit_text(f"ارسال تمام شد.\n\n{result.summary}")

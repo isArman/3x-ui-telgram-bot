@@ -23,6 +23,7 @@ def plan_to_dict(plan: ShopPlan) -> dict[str, Any]:
         "traffic": plan.traffic_gb,
         "price": plan.price,
         "description": plan.description or "",
+        "devices": max(int(plan.devices or 1), 1),
     }
 
 
@@ -106,6 +107,7 @@ async def create_plan(
     traffic_gb: int,
     price: int,
     description: str = "",
+    devices: int = 1,
     sort_order: int | None = None,
 ) -> ShopPlan:
     plan_id = plan_id.strip()
@@ -116,12 +118,13 @@ async def create_plan(
     if sort_order is None:
         sort_order = await count_plans(session)
     plan = ShopPlan(
-        id=plan_id.strip(),
+        id=plan_id,
         name=name.strip(),
         days=int(days),
         traffic_gb=int(traffic_gb),
         price=int(price),
         description=(description or "").strip(),
+        devices=max(int(devices or 1), 1),
         is_active=True,
         sort_order=int(sort_order),
     )

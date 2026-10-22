@@ -112,15 +112,81 @@ def plans_keyboard(plans: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def confirm_order_keyboard(back_callback: str = "back:plans") -> InlineKeyboardMarkup:
-    """Order confirmation keyboard"""
+def confirm_order_keyboard(
+    back_callback: str = "back:plans", *, has_promo: bool = False
+) -> InlineKeyboardMarkup:
+    """Order confirmation keyboard."""
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(text="تایید", callback_data="confirm_order"),
     )
+    if not has_promo:
+        builder.row(
+            InlineKeyboardButton(
+                text="🏷️ کد پرومو", callback_data="promo:enter"
+            )
+        )
     builder.row(
         InlineKeyboardButton(text=BACK_BUTTON, callback_data=back_callback),
         InlineKeyboardButton(text=CANCEL_BUTTON, callback_data="cancel_order"),
+    )
+    return builder.as_markup()
+
+
+def payment_methods_keyboard(
+    *,
+    balance: int = 0,
+    can_use_wallet: bool = True,
+    can_use_stars: bool = True,
+) -> InlineKeyboardMarkup:
+    """Choose how to pay for an order."""
+    builder = InlineKeyboardBuilder()
+    if can_use_wallet:
+        builder.row(
+            InlineKeyboardButton(
+                text=f"👛 کیف پول ({balance:,} تومان)",
+                callback_data="pay:wallet",
+            )
+        )
+    if can_use_stars:
+        builder.row(
+            InlineKeyboardButton(
+                text="⭐ تلگرام استارز",
+                callback_data="pay:stars",
+            )
+        )
+    builder.row(
+        InlineKeyboardButton(text="🏦 کارت به کارت", callback_data="pay:card")
+    )
+    builder.row(
+        InlineKeyboardButton(text=CANCEL_BUTTON, callback_data="cancel_order")
+    )
+    return builder.as_markup()
+
+
+def trial_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text="🎁 دریافت تست رایگان", callback_data="trial:start"
+        )
+    )
+    return builder.as_markup()
+
+
+def usage_keyboard(has_account: bool = True) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    if has_account:
+        builder.row(
+            InlineKeyboardButton(
+                text="📱 کد QR اشتراک", callback_data="usage:qr"
+            )
+        )
+        builder.row(
+            InlineKeyboardButton(text="تمدید اکانت", callback_data="usage:renew")
+        )
+    builder.row(
+        InlineKeyboardButton(text=BACK_BUTTON, callback_data="back:main")
     )
     return builder.as_markup()
 
@@ -150,6 +216,9 @@ def accounts_list_keyboard(
                 callback_data=data,
             )
         )
+    builder.row(
+        InlineKeyboardButton(text="📊 وضعیت و کد QR", callback_data="usage:qr"),
+    )
     builder.row(
         InlineKeyboardButton(text=BACK_BUTTON, callback_data="back:main"),
     )

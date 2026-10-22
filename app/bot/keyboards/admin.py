@@ -61,9 +61,87 @@ def admin_menu_keyboard() -> InlineKeyboardMarkup:
     builder.row(InlineKeyboardButton(text="مدیریت پلن‌ها", callback_data="admin:plans"))
     builder.row(InlineKeyboardButton(text="کارت بانکی", callback_data="admin:card"))
     builder.row(InlineKeyboardButton(text="مدیریت کانفیگ‌ها", callback_data="admin:configs"))
+    builder.row(InlineKeyboardButton(text="مدیریت کاربران", callback_data="admin:users"))
+    builder.row(InlineKeyboardButton(text="کدهای پرومو", callback_data="admin:promos"))
     builder.row(InlineKeyboardButton(text="داشبورد", callback_data="admin:dashboard"))
     builder.row(InlineKeyboardButton(text="پرداخت‌های در انتظار", callback_data="admin:pending"))
     builder.row(InlineKeyboardButton(text="پیام همگانی", callback_data="admin:broadcast"))
+    builder.row(InlineKeyboardButton(text="پشتیبان‌گیری", callback_data="admin:backup"))
+    builder.row(InlineKeyboardButton(text="حالت نگهداری", callback_data="admin:maintenance"))
+    return builder.as_markup()
+
+
+def admin_user_keyboard(user_id: int, *, blocked: bool) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text="🚫 رفع مسدودی" if blocked else "🚫 مسدود کردن",
+            callback_data=f"user:toggle_block:{user_id}",
+        )
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text="💰 افزودن اعتبار", callback_data=f"user:credit:{user_id}"
+        )
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text="🔄 تمدید فوری", callback_data=f"user:renew:{user_id}"
+        )
+    )
+    builder.row(InlineKeyboardButton(text="بازگشت", callback_data="admin:menu"))
+    return builder.as_markup()
+
+
+def admin_broadcast_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="👁 پیش‌نمایش", callback_data="broadcast:preview")
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text="✏️ ویرایش پیام آخر", callback_data="broadcast:edit_last"
+        )
+    )
+    builder.row(InlineKeyboardButton(text="بازگشت", callback_data="admin:menu"))
+    return builder.as_markup()
+
+
+def admin_promo_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="➕ ساخت کد جدید", callback_data="promo:new")
+    )
+    builder.row(InlineKeyboardButton(text="بازگشت", callback_data="admin:menu"))
+    return builder.as_markup()
+
+
+def admin_promo_kind_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="روز اضافه", callback_data="promo:kind:days")
+    )
+    builder.row(
+        InlineKeyboardButton(text="گیگابایت اضافه", callback_data="promo:kind:gb")
+    )
+    builder.row(
+        InlineKeyboardButton(text="درصد تخفیف", callback_data="promo:kind:percent")
+    )
+    builder.row(InlineKeyboardButton(text="بازگشت", callback_data="admin:promos"))
+    return builder.as_markup()
+
+
+def admin_promo_list_keyboard(promos) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for promo in promos:
+        state = "فعال" if promo.is_active else "خاموش"
+        builder.row(
+            InlineKeyboardButton(
+                text=f"{promo.code} ({state})",
+                callback_data=f"promo:toggle:{promo.id}",
+            )
+        )
+    builder.row(InlineKeyboardButton(text="بازگشت", callback_data="admin:menu"))
     return builder.as_markup()
 
 

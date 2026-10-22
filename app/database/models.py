@@ -17,6 +17,7 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     is_blocked: Mapped[bool] = mapped_column(Boolean, default=False)
     balance: Mapped[int] = mapped_column(Integer, default=0)
+    trial_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     referral_code: Mapped[Optional[str]] = mapped_column(
         String(32), unique=True, nullable=True, index=True
     )
@@ -41,6 +42,13 @@ class Order(Base):
     wallet_debit: Mapped[int] = mapped_column(Integer, default=0)
     referral_discount_applied: Mapped[bool] = mapped_column(Boolean, default=False)
     referral_cashback_paid: Mapped[bool] = mapped_column(Boolean, default=False)
+    referral_cashback_level2_paid: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_trial: Mapped[bool] = mapped_column(Boolean, default=False)
+    device_limit: Mapped[int] = mapped_column(Integer, default=1)
+    promo_code: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    promo_bonus_days: Mapped[int] = mapped_column(Integer, default=0)
+    promo_bonus_gb: Mapped[int] = mapped_column(Integer, default=0)
+    promo_discount: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String(50), default="pending")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
@@ -60,6 +68,8 @@ class Payment(Base):
     )
     receipt_file_id: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(String(50), default="pending")  # pending, approved, rejected
+    method: Mapped[str] = mapped_column(String(20), default="card")  # card, stars, wallet, trial
+    telegram_charge_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     admin_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
@@ -146,13 +156,18 @@ class PanelSettings(Base):
 
 
 class BotSettings(Base):
-    """Singleton (id=1) — payment card details editable in the bot."""
+    """Singleton (id=1) — payment card details and shop-wide settings."""
 
     __tablename__ = "bot_settings"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
     card_number: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     card_holder: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    maintenance_mode: Mapped[bool] = mapped_column(Boolean, default=False)
+    trial_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    trial_days: Mapped[int] = mapped_column(Integer, default=1)
+    trial_gb: Mapped[int] = mapped_column(Integer, default=1)
+    stars_rate: Mapped[int] = mapped_column(Integer, default=50)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )
@@ -169,12 +184,64 @@ class ShopPlan(Base):
     traffic_gb: Mapped[int] = mapped_column(Integer, nullable=False)
     price: Mapped[int] = mapped_column(Integer, nullable=False)
     description: Mapped[str] = mapped_column(Text, default="")
+    devices: Mapped[int] = mapped_column(Integer, default=1)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )
+
+
+class PromoCode(Base):
+    """Redemption code: extra days, extra traffic, or a percentage discount."""
+
+    __tablename__ = "promo_codes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String(20), default="days")  # days | gb | percent
+    value: Mapped[int] = mapped_column(Integer, default=0)
+    max_uses: Mapped[int] = mapped_column(Integer, default=0)  # 0 = unlimited
+    used_count: Mapped[int] = mapped_column(Integer, default=0)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class Broadcast(Base):
+    """A message sent (or queued) to users, kept so it can be edited and resent."""
+
+    __tablename__ = "broadcasts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    use_html: Mapped[bool] = mapped_column(Boolean, default=False)
+    target: Mapped[str] = mapped_column(String(20), default="all")  # all | user
+    target_chat_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="draft")  # draft | sent
+    sent_count: Mapped[int] = mapped_column(Integer, default=0)
+    failed_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_by: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+
+class BroadcastMessage(Base):
+    """Where a broadcast landed, so the admin can edit the sent message."""
+
+    __tablename__ = "broadcast_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    broadcast_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("broadcasts.id"), nullable=False, index=True
+    )
+    chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    message_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
 class PricingSettings(Base):

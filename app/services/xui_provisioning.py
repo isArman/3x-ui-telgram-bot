@@ -16,7 +16,12 @@ from app.services.panel_settings import (
 from app.services.traffic_usage import client_record
 from app.utils.client_identity import build_client_comment, panel_client_email
 from app.utils.logger import logger
-from app.xui.client import XUIClient, XUIError, build_subscription_url
+from app.xui.client import (
+    XUIClient,
+    XUIError,
+    build_subscription_url,
+    prepare_client_update_payload,
+)
 
 
 def _gb_to_bytes(gb: int) -> int:
@@ -136,6 +141,7 @@ async def provision_subscription_detailed(
     now_ms = int(time.time() * 1000)
     add_bytes = _gb_to_bytes(order.traffic_gb)
     add_ms = order.days * 24 * 60 * 60 * 1000
+    device_limit = max(int(getattr(order, "device_limit", 1) or 1), 1)
 
     try:
         async with xui_client_for_panel(settings) as client:
@@ -166,8 +172,22 @@ async def provision_subscription_detailed(
                         adjusted.get("skipped"),
                     )
                     return None
-                # Ensure inbound membership matches the selected set.
-                detail = await client.sync_client_inbounds(email, inbound_ids)
+                # bulkAdjust does not touch limitIp, so a plan with a different
+                # device count needs an explicit update. The full record is sent
+                # because the panel replaces the row.
+                if int(client_data.get("limitIp") or 0) != device_limit:
+                    payload = prepare_client_update_payload(
+                        existing_client or {},
+                        email=email,
+                        limit_ip=device_limit,
+                    )
+                    detail = await client.update_client(email, payload, inbound_ids)
+                    logger.info(
+                        "Updated device limit of client %s to %s", email, device_limit
+                    )
+                else:
+                    # Ensure inbound membership matches the selected set.
+                    detail = await client.sync_client_inbounds(email, inbound_ids)
                 logger.info(
                     "Extended 3x-ui client %s for order %s (+%s days, +%s GB)",
                     email,
@@ -182,6 +202,7 @@ async def provision_subscription_detailed(
                     add_bytes,
                     now_ms + add_ms,
                     comment,
+                    limit_ip=device_limit,
                 )
                 logger.info(
                     "Created 3x-ui client %s for order %s", email, order.id

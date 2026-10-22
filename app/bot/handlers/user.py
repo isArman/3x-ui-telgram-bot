@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
 from aiogram import Router, F
-from aiogram.filters import CommandStart
+from aiogram.filters import Command, CommandStart
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from sqlalchemy import select
@@ -25,7 +25,12 @@ from app.bot.constants import (
     ORDER_STATUS_LABELS,
     button_texts,
 )
-from app.bot.states import CustomPlanStates, PaymentStates, WalletPayStates
+from app.bot.states import (
+    CheckoutStates,
+    CustomPlanStates,
+    PaymentStates,
+    WalletPayStates,
+)
 from app.bot.keyboards.user import (
     main_menu_keyboard,
     plans_keyboard,
@@ -35,6 +40,9 @@ from app.bot.keyboards.user import (
     renew_plans_keyboard,
     flow_nav_keyboard,
     wallet_pay_keyboard,
+    payment_methods_keyboard,
+    trial_keyboard,
+    usage_keyboard,
 )
 from app.services.users import get_or_create_user
 from app.services.wallet import (
@@ -65,8 +73,28 @@ from app.services.referral import (
     referral_link,
     try_bind_referrer,
 )
-from app.services.bot_settings import get_card_details
+from app.services.bot_settings import get_card_details, is_maintenance
 from app.services.plans_catalog import get_plan, get_pricing, list_active_plans
+from app.services.promocodes import (
+    PromoApplication,
+    get_promo,
+    normalize_code,
+    reserve_promo,
+    validate_promo,
+)
+from app.services.qr import subscription_qr_png
+from app.services.telegram_payments import (
+    build_stars_invoice,
+    invoice_payload,
+    order_id_from_payload,
+    send_stars_invoice,
+)
+from app.services.trial import (
+    create_trial_order,
+    get_trial_settings,
+    mark_trial_used,
+    trial_available,
+)
 
 router = Router()
 
@@ -121,13 +149,22 @@ async def referral_plans_hint_for(session: AsyncSession, tg_user) -> str:
     return ""
 
 
-async def price_block_for_tg_user(session: AsyncSession, tg_user, list_price: int) -> str:
+async def price_block_for_tg_user(
+    session: AsyncSession,
+    tg_user,
+    list_price: int,
+    promo_discount: int = 0,
+) -> str:
     user, _ = await get_or_create_user(session, tg_user)
+    payable = max(int(list_price) - int(promo_discount or 0), 0)
     eligible = await is_discount_eligible(session, user)
-    payable, original, applied = preview_discounted_price(
-        list_price, eligible=eligible
+    if eligible:
+        payable, _, _ = apply_purchase_discount(payable)
+    return format_price_block(
+        int(list_price),
+        payable=payable,
+        applied=bool(promo_discount) or eligible,
     )
-    return format_price_block(original, payable=payable, applied=applied)
 
 
 async def send_plans_menu(bot, chat_id: int, tg_user=None) -> None:
@@ -160,17 +197,23 @@ async def resolve_order_pricing(session: AsyncSession, data: dict):
     """
     Resolve authoritative plan pricing from DB.
 
-    Ready-made plans: days/traffic/price come from shop_plans via plan_id.
+    Ready-made plans: days/traffic/price/devices come from shop_plans via plan_id.
     Custom plans: recompute price from days/traffic + pricing formula.
 
-    Returns (plan_id, days, traffic_gb, price) or None if invalid.
+    Returns (plan_id, days, traffic_gb, price, devices) or None if invalid.
     """
     plan_id = data.get("plan_id")
     if plan_id:
         plan = await get_plan(session, plan_id, active_only=True)
         if not plan:
             return None
-        return plan_id, int(plan["days"]), int(plan["traffic"]), int(plan["price"])
+        return (
+            plan_id,
+            int(plan["days"]),
+            int(plan["traffic"]),
+            int(plan["price"]),
+            int(plan.get("devices") or 1),
+        )
 
     try:
         days = int(data["days"])
@@ -182,7 +225,7 @@ async def resolve_order_pricing(session: AsyncSession, data: dict):
         return None
 
     pricing = await get_pricing(session)
-    return None, days, traffic, calculate_custom_price(days, traffic, pricing)
+    return None, days, traffic, calculate_custom_price(days, traffic, pricing), 1
 
 
 async def get_or_create_user_from_message(
@@ -191,28 +234,33 @@ async def get_or_create_user_from_message(
     return await get_or_create_user(session, message.from_user)
 
 
-async def prompt_wallet_payment(bot, user_id: int, order: Order, state: FSMContext) -> None:
-    """Ask the user whether to pay with wallet after order creation."""
-    if int(order.price or 0) <= 0:
-        # Nothing to pay — deliver the order right away instead of asking.
-        await deliver_free_order(bot, user_id, order, state)
-        return
-
+async def prompt_payment_methods(
+    bot, user_id: int, order: Order, state: FSMContext
+) -> None:
+    """Ask the customer how they want to pay for an order."""
     async with AsyncSessionLocal() as session:
         balance = await get_balance(session, user_id)
 
     await bot.send_message(
         chat_id=user_id,
         text=get_text(
-            "wallet_pay_prompt",
+            "payment_methods",
             order_id=order.id,
             price_lines=format_order_price_lines(order),
             balance=balance,
         ),
-        reply_markup=wallet_pay_keyboard(),
+        reply_markup=payment_methods_keyboard(
+            balance=balance,
+            can_use_wallet=balance > 0,
+        ),
     )
     await state.update_data(order_id=order.id)
     await state.set_state(WalletPayStates.choosing)
+
+
+async def prompt_wallet_payment(bot, user_id: int, order: Order, state: FSMContext) -> None:
+    """Backwards-compatible alias for the payment-method prompt."""
+    await prompt_payment_methods(bot, user_id, order, state)
 
 
 async def deliver_free_order(
@@ -463,6 +511,20 @@ async def cmd_start(message: Message, state: FSMContext):
         reply_markup=user_main_menu(message.from_user.id),
     )
 
+    # Offer the free trial when the customer is still eligible for one.
+    async with AsyncSessionLocal() as session:
+        can_take, _ = await trial_available(session, message.from_user.id)
+        trial_settings = await get_trial_settings(session)
+    if can_take:
+        await message.answer(
+            get_text(
+                "trial_available",
+                days=trial_settings.days,
+                traffic=trial_settings.gb,
+            ),
+            reply_markup=trial_keyboard(),
+        )
+
 
 @router.message(F.text.in_(button_texts(BTN_REFERRAL)))
 async def show_referral(message: Message, state: FSMContext):
@@ -514,18 +576,198 @@ async def show_plans(message: Message, state: FSMContext):
     )
 
 
+async def _render_checkout(
+    message: Message,
+    state: FSMContext,
+    *,
+    custom: bool,
+    back_callback: str = "back:plans",
+    edit: bool = False,
+) -> None:
+    """
+    Show the order confirmation screen.
+
+    Any promo code stored in the FSM is re-validated here, so the price shown
+    always matches what the order will actually cost.
+    """
+    data = await state.get_data()
+    days = int(data.get("days") or 0)
+    traffic = int(data.get("traffic") or 0)
+    base_price = int(data.get("price") or 0)
+    promo_code = data.get("promo_code")
+
+    bonus_days = bonus_gb = promo_discount = 0
+    if promo_code:
+        async with AsyncSessionLocal() as session:
+            application, _ = await validate_promo(
+                session,
+                promo_code,
+                user_id=message.from_user.id,
+                price=base_price,
+            )
+        if application:
+            bonus_days = application.bonus_days
+            bonus_gb = application.bonus_gb
+            promo_discount = application.discount
+
+    async with AsyncSessionLocal() as session:
+        price_block = await price_block_for_tg_user(
+            session, message.from_user, base_price, promo_discount
+        )
+
+    extra = ""
+    if promo_discount:
+        extra += "\n" + get_text("promo_discount", amount=promo_discount)
+    if bonus_days:
+        extra += "\n" + get_text("promo_days_added", days=bonus_days)
+    if bonus_gb:
+        extra += "\n" + get_text("promo_gb_added", traffic=bonus_gb)
+
+    if custom:
+        text = get_text(
+            "custom_plan_confirm",
+            days=days + bonus_days,
+            traffic=traffic + bonus_gb,
+            price_block=price_block,
+        )
+    else:
+        text = get_text(
+            "plan_confirm",
+            name=data.get("plan_name") or "",
+            days=days + bonus_days,
+            traffic=traffic + bonus_gb,
+            devices=data.get("plan_devices") or 1,
+            price_block=price_block,
+            description=(data.get("plan_description") or ""),
+        )
+
+    reply_markup = confirm_order_keyboard(
+        back_callback, has_promo=bool(promo_code)
+    )
+    if edit:
+        await message.edit_text(text + extra, reply_markup=reply_markup)
+    else:
+        await message.answer(text + extra, reply_markup=reply_markup)
+
+
+@router.callback_query(F.data == "promo:enter")
+async def promo_enter(callback: CallbackQuery, state: FSMContext):
+    """Ask the customer for a promo code."""
+    await state.set_state(CheckoutStates.waiting_for_promo)
+    await callback.message.answer(
+        get_text("promo_enter"),
+        reply_markup=flow_nav_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.message(CheckoutStates.waiting_for_promo)
+async def promo_receive(message: Message, state: FSMContext):
+    """Apply a promo code to the order being composed."""
+    text = (message.text or "").strip()
+    if text == CANCEL_BUTTON:
+        await state.clear()
+        await message.answer(
+            get_text("start"), reply_markup=user_main_menu(message.from_user.id)
+        )
+        return
+
+    data = await state.get_data()
+    base_price = int(data.get("price") or 0)
+    async with AsyncSessionLocal() as session:
+        application, error = await validate_promo(
+            session,
+            text,
+            user_id=message.from_user.id,
+            price=base_price,
+        )
+        if not application:
+            await message.answer(get_text("promo_invalid", reason=error))
+            return
+
+    await state.update_data(promo_code=application.code)
+    await state.set_state(None)
+    await message.answer(get_text("promo_applied", code=application.code))
+    await _render_checkout(message, state, custom=not data.get("plan_id"))
+
+
+@router.callback_query(F.data == "trial:start")
+async def trial_start(callback: CallbackQuery, state: FSMContext):
+    """Give the customer their one free trial."""
+    from app.utils.logger import logger
+
+    async with AsyncSessionLocal() as session:
+        can_take, reason = await trial_available(session, callback.from_user.id)
+        if not can_take:
+            await callback.answer(reason, show_alert=True)
+            return
+
+        user, _ = await get_or_create_user(session, callback.from_user)
+        trial_settings = await get_trial_settings(session)
+        order = await create_trial_order(session, user, trial_settings)
+        await mark_trial_used(session, user)
+        await session.commit()
+        await session.refresh(order)
+
+    await callback.answer()
+    await callback.message.answer(get_text("trial_claimed"))
+
+    try:
+        async with AsyncSessionLocal() as session:
+            await fulfill_trial_order(callback.bot, session, order)
+    except Exception as exc:
+        logger.error("Failed to deliver trial order %s: %s", order.id, exc)
+        await callback.message.answer(
+            "ثبت تست انجام شد اما فعال‌سازی خودکار ناموفق بود. ادمین به‌زودی اکانت را می‌فرستد."
+        )
+
+
+async def fulfill_trial_order(bot, session: AsyncSession, order: Order) -> None:
+    """Deliver a trial the same way a paid order is delivered."""
+    from app.bot.handlers.admin import send_config_to_user, send_renewal_to_user
+    from app.services.order_fulfillment import fulfill_paid_order
+
+    plan = await get_plan(session, order.plan_id) if order.plan_id else None
+    plan_name = plan["name"] if plan else None
+
+    payment = Payment(
+        order_id=order.id,
+        user_id=order.user_id,
+        receipt_file_id="trial",
+        status="pending",
+        method="trial",
+    )
+    session.add(payment)
+    await session.commit()
+    await session.refresh(payment)
+
+    fulfill = await fulfill_paid_order(session, payment, order, None, plan_name)
+    if fulfill.kind in ("renewal_auto", "renewal_db") and fulfill.vpn_account:
+        await send_renewal_to_user(bot, order.user_id, fulfill.vpn_account, order)
+        return
+    if fulfill.kind in ("new_auto", "new_inventory") and fulfill.config_text:
+        await send_config_to_user(bot, order.user_id, fulfill.config_text)
+        return
+    await notify_admins_trial_manual(bot, order, payment)
+
+
+async def notify_admins_trial_manual(bot, order: Order, payment: Payment) -> None:
+    """Tell the admins that a trial needs a manual subscription link."""
+    await notify_admins_wallet_manual(bot, payment, order)
+
+
 @router.callback_query(F.data.startswith("plan:"))
 async def select_plan(callback: CallbackQuery, state: FSMContext):
     """Handle plan selection"""
     plan_id = callback.data.split(":")[1]
     async with AsyncSessionLocal() as session:
+        if await is_maintenance(session):
+            await callback.answer(get_text("maintenance_notice"), show_alert=True)
+            return
         plan = await get_plan(session, plan_id, active_only=True)
         if not plan:
             await callback.answer("پلن پیدا نشد.", show_alert=True)
             return
-        price_block = await price_block_for_tg_user(
-            session, callback.from_user, plan["price"]
-        )
 
     await abandon_current_order_if_any(state, callback.from_user.id)
     await state.clear()
@@ -534,21 +776,17 @@ async def select_plan(callback: CallbackQuery, state: FSMContext):
         days=plan["days"],
         traffic=plan["traffic"],
         price=plan["price"],
+        plan_name=plan["name"],
+        plan_devices=plan.get("devices") or 1,
+        plan_description=(plan.get("description") or "").strip(),
     )
 
-    desc = (plan.get("description") or "").strip()
-    desc_block = f"{desc}\n" if desc else ""
-
-    await callback.message.edit_text(
-        get_text(
-            "plan_confirm",
-            name=plan["name"],
-            days=plan["days"],
-            traffic=plan["traffic"],
-            price_block=price_block,
-            description=desc_block,
-        ),
-        reply_markup=confirm_order_keyboard("back:plans"),
+    await _render_checkout(
+        callback.message,
+        state,
+        custom=False,
+        back_callback="back:plans",
+        edit=True,
     )
     await callback.answer()
 
@@ -633,15 +871,7 @@ async def custom_plan_traffic(message: Message, state: FSMContext):
 
         await state.update_data(traffic=traffic, price=price, plan_id=None)
 
-        await message.answer(
-            get_text(
-                "custom_plan_confirm",
-                days=days,
-                traffic=traffic,
-                price_block=price_block,
-            ),
-            reply_markup=confirm_order_keyboard("back:custom_traffic"),
-        )
+        await _render_checkout(message, state, custom=True, back_callback="back:custom_traffic")
         await state.set_state(CustomPlanStates.waiting_for_confirm)
     except (TypeError, ValueError):
         await message.answer(get_text("error_invalid_number"))
@@ -684,6 +914,9 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext):
     
     data = await state.get_data()
     async with AsyncSessionLocal() as session:
+        if await is_maintenance(session):
+            await callback.answer(get_text("maintenance_notice"), show_alert=True)
+            return
         resolved = await resolve_order_pricing(session, data)
 
     if not resolved:
@@ -694,36 +927,61 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext):
         await state.clear()
         return
 
-    plan_id, days, traffic_gb, price = resolved
-    
+    plan_id, days, traffic_gb, price, devices = resolved
+
     try:
         async with AsyncSessionLocal() as session:
             user, _ = await get_or_create_user(session, callback.from_user)
 
+            # A promo code is re-validated here: the state is only a hint, the
+            # database decides what the customer actually pays.
+            promo_code = data.get("promo_code")
+            promo = None
+            if promo_code:
+                promo, _ = await validate_promo(
+                    session,
+                    promo_code,
+                    user_id=callback.from_user.id,
+                    price=price,
+                )
+
             original_price = price
+            promo_discount = 0
+            bonus_days = bonus_gb = 0
+            if promo:
+                promo_discount = promo.discount
+                bonus_days = promo.bonus_days
+                bonus_gb = promo.bonus_gb
+                price = max(price - promo_discount, 0)
+
             discount_applied = False
             if await is_discount_eligible(session, user):
-                payable, original_price, discount_applied = apply_purchase_discount(
-                    price
-                )
+                payable, _, discount_applied = apply_purchase_discount(price)
                 price = payable
 
             order = Order(
                 user_id=callback.from_user.id,
-                days=days,
-                traffic_gb=traffic_gb,
+                days=days + bonus_days,
+                traffic_gb=traffic_gb + bonus_gb,
                 price=price,
                 original_price=original_price,
                 plan_id=plan_id,
                 referral_discount_applied=discount_applied,
+                device_limit=max(int(devices or 1), 1),
+                promo_code=promo.code if promo else None,
+                promo_discount=promo_discount,
+                promo_bonus_days=bonus_days,
+                promo_bonus_gb=bonus_gb,
                 status="pending",
             )
             session.add(order)
+            if promo:
+                await reserve_promo(session, await get_promo(session, promo.code))
             await session.commit()
             await session.refresh(order)
 
         await callback.message.delete()
-        await prompt_wallet_payment(
+        await prompt_payment_methods(
             callback.bot, callback.from_user.id, order, state
         )
 
@@ -749,6 +1007,17 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(WalletPayStates.choosing, F.data == "wallet_pay:no")
 async def wallet_pay_no(callback: CallbackQuery, state: FSMContext):
+    """Legacy keyboard: card payment."""
+    await _run_card_payment(callback, state)
+
+
+@router.callback_query(WalletPayStates.choosing, F.data == "pay:card")
+async def pay_card(callback: CallbackQuery, state: FSMContext):
+    """Pay by card transfer."""
+    await _run_card_payment(callback, state)
+
+
+async def _run_card_payment(callback: CallbackQuery, state: FSMContext) -> None:
     data = await state.get_data()
     order_id = data.get("order_id")
     if not order_id:
@@ -781,6 +1050,17 @@ async def wallet_pay_no(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(WalletPayStates.choosing, F.data == "wallet_pay:yes")
 async def wallet_pay_yes(callback: CallbackQuery, state: FSMContext):
+    """Legacy keyboard: wallet payment."""
+    await _run_wallet_payment(callback, state)
+
+
+@router.callback_query(WalletPayStates.choosing, F.data == "pay:wallet")
+async def pay_wallet(callback: CallbackQuery, state: FSMContext):
+    """Pay from the wallet balance."""
+    await _run_wallet_payment(callback, state)
+
+
+async def _run_wallet_payment(callback: CallbackQuery, state: FSMContext) -> None:
     from app.utils.logger import logger
 
     data = await state.get_data()
@@ -920,6 +1200,214 @@ async def wallet_pay_yes(callback: CallbackQuery, state: FSMContext):
     )
     await callback.answer()
 
+
+
+@router.callback_query(WalletPayStates.choosing, F.data == "pay:stars")
+async def pay_stars(callback: CallbackQuery, state: FSMContext):
+    """Send a Telegram Stars invoice for the order."""
+    data = await state.get_data()
+    order_id = data.get("order_id")
+    if not order_id:
+        await callback.answer(get_text("error_general"), show_alert=True)
+        await state.clear()
+        return
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(Order).where(Order.id == order_id))
+        order = result.scalar_one_or_none()
+        if not order or order.user_id != callback.from_user.id:
+            await callback.answer(get_text("error_general"), show_alert=True)
+            await state.clear()
+            return
+        if order.status != "pending":
+            await callback.answer("این سفارش قابل پرداخت نیست.", show_alert=True)
+            await state.clear()
+            return
+
+        stars, rate = await build_stars_invoice(session, order)
+        plan = await get_plan(session, order.plan_id) if order.plan_id else None
+
+    if stars <= 0:
+        await callback.answer(get_text("stars_expired"), show_alert=True)
+        return
+
+    try:
+        await send_stars_invoice(
+            callback.bot,
+            callback.from_user.id,
+            order,
+            stars=stars,
+            plan_name=plan["name"] if plan else "",
+        )
+    except Exception as exc:
+        from app.utils.logger import logger
+
+        logger.error("Could not send stars invoice for order %s: %s", order.id, exc)
+        await callback.answer("ارسال فاکتور استارز ناموفق بود.", show_alert=True)
+        return
+
+    await callback.answer()
+    await callback.bot.send_message(
+        chat_id=callback.from_user.id,
+        text=get_text(
+            "stars_invoice",
+            stars=stars,
+            toman=stars * rate,
+        ),
+    )
+
+
+@router.pre_checkout_query()
+async def stars_pre_checkout(query):
+    """Telegram asks before charging — approve it and let the payment settle."""
+    await query.answer(ok=True)
+
+
+@router.message(F.successful_payment)
+async def stars_paid(message: Message):
+    """Telegram confirmed a Stars payment: mark the order paid and deliver it."""
+    from app.utils.logger import logger
+
+    payment_info = message.successful_payment
+    order_id = order_id_from_payload(payment_info.invoice_payload)
+    if order_id is None:
+        logger.warning("Stars payment with an unknown payload: %s", payment_info.invoice_payload)
+        return
+
+    charge_id = payment_info.telegram_payment_charge_id
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(Order).where(Order.id == order_id))
+        order = result.scalar_one_or_none()
+        if not order or order.user_id != message.from_user.id:
+            logger.warning("Stars payment for an unknown order: %s", order_id)
+            return
+        if order.status not in ("pending", "paid"):
+            logger.info("Stars payment for an order that is already handled: %s", order_id)
+            return
+
+        existing = (
+            await session.execute(
+                select(Payment).where(
+                    Payment.order_id == order.id,
+                    Payment.status.in_(("pending", "approved")),
+                )
+            )
+        ).scalar_one_or_none()
+        if existing:
+            logger.info("Order %s already has a payment", order.id)
+            return
+
+        order.status = "paid"
+        payment = Payment(
+            order_id=order.id,
+            user_id=order.user_id,
+            receipt_file_id=charge_id or "stars",
+            status="pending",
+            method="stars",
+            telegram_charge_id=charge_id,
+        )
+        session.add(payment)
+        await session.commit()
+        await session.refresh(payment)
+        await session.refresh(order)
+
+    await message.answer(get_text("stars_success"))
+
+    try:
+        async with AsyncSessionLocal() as session:
+            await fulfill_paid_order_for_user(message.bot, session, order, payment)
+    except Exception as exc:
+        logger.error("Failed to deliver stars order %s: %s", order.id, exc)
+        await message.answer(
+            "پرداخت ثبت شد اما فعال‌سازی خودکار ناموفق بود. ادمین به‌زودی اکانت را می‌فرستد."
+        )
+
+
+async def fulfill_paid_order_for_user(
+    bot, session: AsyncSession, order: Order, payment: Payment
+) -> None:
+    """Deliver a paid order (auto provision, inventory, or ask the admin)."""
+    from app.bot.handlers.admin import send_config_to_user, send_renewal_to_user
+    from app.services.order_fulfillment import fulfill_paid_order
+
+    plan = await get_plan(session, order.plan_id) if order.plan_id else None
+    plan_name = plan["name"] if plan else None
+
+    fulfill = await fulfill_paid_order(session, payment, order, None, plan_name)
+    if fulfill.kind in ("renewal_auto", "renewal_db") and fulfill.vpn_account:
+        await send_renewal_to_user(bot, order.user_id, fulfill.vpn_account, order)
+        return
+    if fulfill.kind in ("new_auto", "new_inventory") and fulfill.config_text:
+        await send_config_to_user(bot, order.user_id, fulfill.config_text)
+        return
+    await notify_admins_wallet_manual(bot, payment, order)
+
+
+@router.message(Command("usage"))
+async def usage_command(message: Message, state: FSMContext):
+    """Show the customer's own quota, usage and expiry."""
+    await send_usage(message, message.from_user.id)
+
+
+@router.callback_query(F.data == "usage:qr")
+async def usage_qr(callback: CallbackQuery):
+    """Send the subscription link as a QR code."""
+    from app.utils.logger import logger
+
+    async with AsyncSessionLocal() as session:
+        panel = await get_panel_settings(session)
+        accounts = await _load_db_accounts(session, callback.from_user.id)
+
+    link = ""
+    for account in accounts:
+        if account.subscription_path:
+            link = account.subscription_path
+            break
+
+    if not link:
+        await callback.answer(get_text("usage_none"), show_alert=True)
+        return
+
+    try:
+        png = subscription_qr_png(link)
+    except Exception as exc:
+        logger.error("Could not render a subscription QR: %s", exc)
+        await callback.answer("ساخت کد QR ناموفق بود.", show_alert=True)
+        return
+
+    await callback.answer()
+    await callback.bot.send_photo(
+        chat_id=callback.from_user.id,
+        photo=png,
+        caption=get_text("usage_qr_caption"),
+    )
+
+
+async def send_usage(message: Message, user_id: int) -> None:
+    """Send the usage summary for one customer."""
+    async with AsyncSessionLocal() as session:
+        accounts = await _load_db_accounts(session, user_id)
+
+    if not accounts:
+        await message.answer(
+            get_text("usage_none"),
+            reply_markup=user_main_menu(user_id),
+        )
+        return
+
+    account = accounts[0]
+    now = datetime.utcnow()
+    expires_at = account.expires_at
+    days_left = max((expires_at - now).days, 0)
+    text = (
+        f"{get_text('usage_title')}\n\n"
+        f"حجم کل: {account.traffic_limit_gb} گیگابایت\n"
+        f"تاریخ انقضا: {expires_at.strftime('%Y-%m-%d')}\n"
+        f"روزهای باقی‌مانده: {days_left}\n"
+        f"لینک اشتراک:\n{account.subscription_path}"
+    )
+    await message.answer(text, reply_markup=usage_keyboard(has_account=True))
 
 
 @router.message(

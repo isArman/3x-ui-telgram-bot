@@ -83,6 +83,57 @@ async def _migrate_sqlite_columns(conn):
             text("ALTER TABLE panel_settings ADD COLUMN panel_api_token VARCHAR(255)")
         )
 
+    result = await conn.execute(text("PRAGMA table_info(shop_plans)"))
+    plan_cols = {row[1] for row in result.fetchall()}
+    if "devices" not in plan_cols:
+        await conn.execute(
+            text("ALTER TABLE shop_plans ADD COLUMN devices INTEGER DEFAULT 1")
+        )
+
+    result = await conn.execute(text("PRAGMA table_info(bot_settings)"))
+    bot_cols = {row[1] for row in result.fetchall()}
+    for column, ddl in (
+        ("maintenance_mode", "BOOLEAN DEFAULT 0"),
+        ("trial_enabled", "BOOLEAN DEFAULT 1"),
+        ("trial_days", "INTEGER DEFAULT 1"),
+        ("trial_gb", "INTEGER DEFAULT 1"),
+        ("stars_rate", "INTEGER DEFAULT 50"),
+    ):
+        if column not in bot_cols:
+            await conn.execute(
+                text(f"ALTER TABLE bot_settings ADD COLUMN {column} {ddl}")
+            )
+
+    result = await conn.execute(text("PRAGMA table_info(orders)"))
+    order_cols = {row[1] for row in result.fetchall()}
+    for column, ddl in (
+        ("is_trial", "BOOLEAN DEFAULT 0"),
+        ("device_limit", "INTEGER DEFAULT 1"),
+        ("promo_code", "VARCHAR(50)"),
+        ("promo_bonus_days", "INTEGER DEFAULT 0"),
+        ("promo_bonus_gb", "INTEGER DEFAULT 0"),
+        ("promo_discount", "INTEGER DEFAULT 0"),
+        ("referral_cashback_level2_paid", "BOOLEAN DEFAULT 0"),
+    ):
+        if column not in order_cols:
+            await conn.execute(text(f"ALTER TABLE orders ADD COLUMN {column} {ddl}"))
+
+    result = await conn.execute(text("PRAGMA table_info(payments)"))
+    payment_cols = {row[1] for row in result.fetchall()}
+    for column, ddl in (
+        ("method", "VARCHAR(20) DEFAULT 'card'"),
+        ("telegram_charge_id", "VARCHAR(100)"),
+    ):
+        if column not in payment_cols:
+            await conn.execute(text(f"ALTER TABLE payments ADD COLUMN {column} {ddl}"))
+
+    result = await conn.execute(text("PRAGMA table_info(users)"))
+    user_cols = {row[1] for row in result.fetchall()}
+    if "trial_used_at" not in user_cols:
+        await conn.execute(
+            text("ALTER TABLE users ADD COLUMN trial_used_at DATETIME")
+        )
+
     result = await conn.execute(text("PRAGMA table_info(vpn_accounts)"))
     vpn_cols = {row[1] for row in result.fetchall()}
     if "config_ref" not in vpn_cols and "xui_client_id" in vpn_cols:

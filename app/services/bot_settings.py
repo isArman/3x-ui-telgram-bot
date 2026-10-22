@@ -54,3 +54,35 @@ async def set_card_holder(session: AsyncSession, value: str) -> BotSettings:
     await session.commit()
     await session.refresh(row)
     return row
+
+
+async def set_bot_settings(
+    session: AsyncSession,
+    *,
+    maintenance_mode: bool | None = None,
+    trial_enabled: bool | None = None,
+    trial_days: int | None = None,
+    trial_gb: int | None = None,
+    stars_rate: int | None = None,
+) -> BotSettings:
+    """Update the shop-wide settings (only the given fields)."""
+    row = await get_bot_settings(session)
+    if maintenance_mode is not None:
+        row.maintenance_mode = bool(maintenance_mode)
+    if trial_enabled is not None:
+        row.trial_enabled = bool(trial_enabled)
+    if trial_days is not None:
+        row.trial_days = max(int(trial_days), 0)
+    if trial_gb is not None:
+        row.trial_gb = max(int(trial_gb), 0)
+    if stars_rate is not None:
+        row.stars_rate = max(int(stars_rate), 1)
+    await session.commit()
+    await session.refresh(row)
+    return row
+
+
+async def is_maintenance(session: AsyncSession) -> bool:
+    """True while the shop is closed for maintenance."""
+    row = await get_bot_settings(session)
+    return bool(row.maintenance_mode)

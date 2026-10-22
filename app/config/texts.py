@@ -12,6 +12,7 @@ TEXTS = {
 
 مدت: {days} روز
 حجم: {traffic} گیگابایت
+تعداد دستگاه: {devices}
 قیمت: {price:,} تومان
 
 {description}
@@ -36,6 +37,7 @@ TEXTS = {
 
 مدت: {days} روز
 حجم: {traffic} گیگابایت
+تعداد دستگاه: {devices}
 {price_block}
 {description}
 تایید می‌کنید؟
@@ -300,7 +302,81 @@ TEXTS = {
 {price:,} تومان{discount_tag}
 وضعیت: {status}
 {created_at}
-"""
+""",
+
+    # --- trial / promo / payment methods ---------------------------------
+    "trial_available": "🎁 تست رایگان {days} روزه با {traffic} گیگابایت",
+    "trial_claimed": "تست رایگان شما فعال شد. اشتراک به‌زودی ارسال می‌شود.",
+    "trial_unavailable": "تست رایگان در حال حاضر در دسترس نیست.",
+    "trial_button": "🎁 دریافت تست رایگان",
+
+    "promo_enter": "کد پرومو را بفرستید (یا «لغو» برای بازگشت).",
+    "promo_applied": "کد «{code}» اعمال شد.",
+    "promo_invalid": "کد پرومو نامعتبر است: {reason}",
+    "promo_none": "بدون کد پرومو",
+    "promo_days_added": "{days} روز اضافه شد",
+    "promo_gb_added": "{traffic} گیگابایت اضافه شد",
+    "promo_discount": "{amount:,} تومان تخفیف",
+
+    "payment_methods": """
+پرداخت سفارش #{order_id}
+
+{price_lines}
+موجودی کیف پول: {balance:,} تومان
+
+یک روش پرداخت را انتخاب کنید.
+""",
+    "payment_wallet": "💳 پرداخت از کیف پول",
+    "payment_stars": "⭐ پرداخت با تلگرام استارز",
+    "payment_card": "🏦 کارت به کارت",
+    "stars_invoice": "مبلغ قابل پرداخت: {stars} ⭐ (تقریباً {toman:,} تومان)",
+    "stars_success": "پرداخت با استارز انجام شد. اکانت شما به‌زودی ارسال می‌شود.",
+    "stars_failed": "پرداخت استارز کامل نشد.",
+    "stars_expired": "این فاکتور منقضی شده است. لطفاً دوباره انتخاب کنید.",
+
+    "usage_title": "وضعیت اشتراک",
+    "usage_none": "شما هم‌اکنون اشتراک فعالی ندارید.",
+    "usage_qr_caption": "کد QR اشتراک شما",
+    "usage_qr_button": "📱 کد QR اشتراک",
+
+    # --- admin: user editor ----------------------------------------------
+    "admin_user_summary": """
+کاربر: {name}
+شناسه: {user_id}
+موجودی کیف پول: {balance:,} تومان
+سفارش‌ها: {total_orders} ({completed} تکمیل‌شده)
+مجموع خرید: {spent:,} تومان
+اشتراک فعال: {accounts}
+دعوت‌شده توسط: {referrer}
+تعداد دعوت: {referrals}
+مسدود: {blocked}
+""",
+    "admin_user_not_found": "کاربری با این مشخصات پیدا نشد.",
+    "admin_user_blocked": "کاربر مسدود شد.",
+    "admin_user_unblocked": "کاربر از حالت مسدودی خارج شد.",
+    "admin_user_credited": "{amount:,} تومان به کیف پول کاربر اضافه شد.",
+    "admin_credit_prompt": "مبلغ اعتبار (تومان) را بفرستید.",
+
+    # --- admin: promo codes ----------------------------------------------
+    "admin_promo_prompt": "کد پرومو را بفرستید (مثلاً SUMMER).",
+    "admin_promo_kind_prompt": "نوع کد را انتخاب کنید:\n۱- روز اضافه\n۲- گیگابایت اضافه\n۳- درصد تخفیف",
+    "admin_promo_value_prompt": "مقدار را بفرستید (عدد).",
+    "admin_promo_created": "کد «{code}» ساخته شد: {effect}",
+    "admin_promo_list": "کدهای پرومو:\n{list}",
+    "admin_promo_toggled": "کد «{code}» {state} شد.",
+    "admin_promo_deleted": "کد «{code}» حذف شد.",
+    "admin_promo_not_found": "کد پرومو پیدا نشد.",
+
+    # --- admin: broadcast / maintenance / backup --------------------------
+    "admin_broadcast_preview": "پیش‌نمایش پیام:\n\n{text}",
+    "admin_broadcast_edited": "پیام آخر ویرایش شد ({count} پیام).",
+    "admin_broadcast_target_user": "شماره کاربر را بفرستید، یا «لغو».",
+    "admin_maintenance_on": "حالت نگهداری روشن شد — کاربران نمی‌توانند خرید کنند.",
+    "admin_maintenance_off": "حالت نگهداری خاموش شد.",
+    "admin_backup_ready": "پشتیبان دیتابیس آماده شد.",
+    "admin_backup_failed": "پشتیبان‌گیری ناموفق بود: {error}",
+    "maintenance_notice": "فروش موقتاً متوقف است. کمی بعد دوباره تلاش کنید.",
+    "trial_settings": "تست رایگان: {state} — {days} روز، {traffic} گیگابایت",
 }
 
 

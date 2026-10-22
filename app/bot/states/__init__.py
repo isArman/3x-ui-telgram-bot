@@ -25,6 +25,12 @@ class WalletPayStates(StatesGroup):
     choosing = State()
 
 
+class CheckoutStates(StatesGroup):
+    """Checkout helpers that sit between the plan screen and the payment."""
+
+    waiting_for_promo = State()
+
+
 class AdminStates(StatesGroup):
     waiting_for_subscription = State()
     waiting_for_config_text = State()
@@ -40,8 +46,14 @@ class AdminStates(StatesGroup):
     waiting_for_plan_days = State()
     waiting_for_plan_traffic = State()
     waiting_for_plan_price = State()
+    waiting_for_plan_devices = State()
     waiting_for_plan_description = State()
     waiting_for_plan_edit_value = State()
     waiting_for_pricing_per_day = State()
     waiting_for_pricing_per_gb = State()
     waiting_for_broadcast_text = State()
+    waiting_for_user_credit = State()
+    waiting_for_user_lookup = State()
+    waiting_for_promo_code = State()
+    waiting_for_promo_value = State()
+    waiting_for_trial_days = State()

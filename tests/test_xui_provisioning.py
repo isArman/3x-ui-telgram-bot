@@ -51,6 +51,7 @@ class _FakePanel:
         self.bulk_adjust_calls = []
         self.add_client_calls = []
         self.sync_calls = []
+        self.update_calls = []
 
     async def list_inbounds(self):
         return [{"id": 1, "enable": True}]
@@ -68,6 +69,10 @@ class _FakePanel:
         self.sync_calls.append((email, inbound_ids))
         return self.existing_client
 
+    async def update_client(self, email, payload, inbound_ids):
+        self.update_calls.append((email, payload, inbound_ids))
+        return self.existing_client
+
     async def add_client(self, email, inbound_ids, total_bytes, expiry_ms, comment, **kw):
         self.add_client_calls.append(
             {
@@ -76,6 +81,7 @@ class _FakePanel:
                 "total_bytes": total_bytes,
                 "expiry_ms": expiry_ms,
                 "comment": comment,
+                **kw,
             }
         )
         return {"client": {"subId": "sub-new", "email": email, "enable": True}}
@@ -93,6 +99,7 @@ class _Order:
     user_id = 5821190149
     days = 30
     traffic_gb = 20
+    device_limit = 1
 
 
 def _patch_panel(monkeypatch, fake_panel):
@@ -111,7 +118,14 @@ def _patch_panel(monkeypatch, fake_panel):
 @pytest.mark.asyncio
 async def test_existing_client_is_extended_atomically(monkeypatch):
     """A repeat purchase/renewal extends via bulkAdjust (delta), not a reset."""
-    existing = {"client": {"email": str(_User.id), "enable": False, "subId": "sub-1"}}
+    existing = {
+        "client": {
+            "email": str(_User.id),
+            "enable": False,
+            "subId": "sub-1",
+            "limitIp": 1,
+        }
+    }
     fake = _FakePanel(existing_client=existing)
     _patch_panel(monkeypatch, fake)
 
@@ -128,6 +142,35 @@ async def test_existing_client_is_extended_atomically(monkeypatch):
     assert fake.add_client_calls == []
     assert fake.sync_calls == [(str(_User.id), [1])]
     assert url == "https://panel.example.com/sub/sub-1"
+
+
+@pytest.mark.asyncio
+async def test_device_limit_is_applied_to_an_existing_client(monkeypatch):
+    """A plan's device count must reach the panel's limitIp."""
+    existing = {
+        "client": {
+            "email": str(_User.id),
+            "enable": True,
+            "subId": "sub-1",
+            "limitIp": 0,
+        }
+    }
+    fake = _FakePanel(existing_client=existing)
+    _patch_panel(monkeypatch, fake)
+
+    order = _Order()
+    order.device_limit = 3
+    await provision_subscription_for_order(
+        None, _panel_settings(), _User(), order
+    )
+
+    assert len(fake.update_calls) == 1
+    email, payload, _ = fake.update_calls[0]
+    assert email == str(_User.id)
+    assert payload["limitIp"] == 3
+    # the whole record is sent, because the panel replaces the row
+    assert payload["subId"] == "sub-1"
+    assert payload["email"] == str(_User.id)
 
 
 @pytest.mark.asyncio

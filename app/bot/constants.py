@@ -11,6 +11,8 @@ BTN_WALLET = "کیف پول من"
 BTN_REFERRAL = "دعوت دوستان"
 BTN_TOP_UP = "شارژ کیف پول"
 BTN_ADMIN_PANEL = "پنل ادمین"
+BTN_TRIAL = "تست رایگان"
+BTN_PROMO_CODE = "کد پرومو"
 
 # Telegram caches reply keyboards on the client. After we dropped emojis from
 # button labels, users keep sending the old texts until they get a fresh

@@ -45,7 +45,11 @@ def test_dispatcher_builds_with_every_router():
         assert router.message.handlers, router
         assert router.callback_query.handlers, router
 
-    assert set(dp.resolve_used_update_types()) == {"message", "callback_query"}
+    assert set(dp.resolve_used_update_types()) == {
+        "message",
+        "callback_query",
+        "pre_checkout_query",
+    }
     assert runner_main is not None
 
 
