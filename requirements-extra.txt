@@ -1,0 +1,6 @@
+# Optional extras, installed in their own Docker layer.
+#
+# Keeping them out of requirements.txt means the main dependency layer stays
+# cached in the image, so a rebuild only fetches these few small packages
+# instead of reinstalling everything.
+segno==1.6.6
