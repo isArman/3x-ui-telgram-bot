@@ -4,6 +4,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from app.config.settings import settings
 
 from .base import Base
+from . import models as _models  # noqa: F401  (registers the tables on Base.metadata)
+
+__all__ = ["Base", "engine", "AsyncSessionLocal", "init_db"]
 
 
 engine = create_async_engine(
