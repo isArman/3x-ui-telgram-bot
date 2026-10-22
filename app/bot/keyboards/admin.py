@@ -182,6 +182,12 @@ def panel_menu_keyboard(provisioning_mode: str, is_verified: bool) -> InlineKeyb
         )
         builder.row(
             InlineKeyboardButton(
+                text="ساخت دوباره توکن API",
+                callback_data="admin:panel:token",
+            )
+        )
+        builder.row(
+            InlineKeyboardButton(
                 text="تست اتصال",
                 callback_data="admin:panel:test",
             )

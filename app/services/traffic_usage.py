@@ -1,4 +1,16 @@
-"""Traffic usage helpers for low-volume notifications."""
+"""Traffic usage helpers for low-volume notifications.
+
+The 3x-ui panel reports a client's traffic in two shapes, and the bot has to
+cope with both:
+
+* ``GET /panel/api/clients/get/:email`` returns an envelope
+  ``{client, inboundIds, usedTraffic, ...}`` where ``usedTraffic`` is the
+  *total* bytes used (up + down).
+* ``GET /panel/api/clients/list`` and ``GET /panel/api/clients/traffic/:email``
+  return a ``traffic: {up, down, ...}`` object.
+
+Older panels only ever returned the ``traffic`` object, so both are accepted.
+"""
 
 from __future__ import annotations
 
@@ -8,20 +20,37 @@ GB = 1024**3
 LOW_TRAFFIC_THRESHOLD_PERCENT = 10.0
 
 
+def client_record(detail: dict[str, Any]) -> dict[str, Any]:
+    """The client record, whether it is wrapped in an envelope or flat."""
+    inner = detail.get("client")
+    return inner if isinstance(inner, dict) else detail
+
+
+def used_bytes(detail: dict[str, Any]) -> int:
+    """Bytes consumed by the client, from whichever shape the panel returned."""
+    traffic = detail.get("traffic")
+    if isinstance(traffic, dict):
+        up = traffic.get("up")
+        down = traffic.get("down")
+        if up is not None or down is not None:
+            return int(up or 0) + int(down or 0)
+    used = detail.get("usedTraffic")
+    if used is not None:
+        return int(used or 0)
+    return 0
+
+
 def parse_client_traffic(detail: dict[str, Any]) -> tuple[int, int] | None:
     """
-    Parse 3x-ui GET /clients/get response.
+    Parse a client payload.
 
-    Returns (total_bytes, used_bytes) or None when traffic is unlimited.
+    Returns (total_bytes, used_bytes) or None when the quota is unlimited.
     """
-    client = detail.get("client") or {}
-    total_bytes = int(client.get("totalGB") or 0)
+    record = client_record(detail)
+    total_bytes = int(record.get("totalGB") or 0)
     if total_bytes <= 0:
         return None
-
-    traffic = detail.get("traffic") or {}
-    used_bytes = int(traffic.get("up") or 0) + int(traffic.get("down") or 0)
-    return total_bytes, used_bytes
+    return total_bytes, used_bytes(detail)
 
 
 def remaining_traffic_percent(total_bytes: int, used_bytes: int) -> float:

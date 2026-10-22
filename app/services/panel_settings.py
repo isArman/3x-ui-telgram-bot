@@ -46,7 +46,7 @@ async def get_panel_settings(session: AsyncSession) -> PanelSettings:
 
 
 def get_panel_password(settings: PanelSettings) -> str:
-    pwd = decrypt_if_needed(settings.panel_password or "")
+    pwd = decrypt_if_needed(getattr(settings, "panel_password", "") or "")
     if _looks_encrypted(pwd):
         logger.warning(
             "Panel password could not be decrypted — re-run panel setup in the bot."
@@ -80,6 +80,35 @@ def repair_panel_password(settings: PanelSettings) -> bool:
 
 def set_panel_password(settings: PanelSettings, password: str) -> None:
     settings.panel_password = encrypt(password) if password else ""
+
+
+def get_panel_api_token(settings: PanelSettings) -> str:
+    """The panel API token, if one was stored."""
+    token = decrypt_if_needed(getattr(settings, "panel_api_token", "") or "")
+    if _looks_encrypted(token):
+        logger.warning("Panel API token could not be decrypted — re-run panel setup.")
+        return ""
+    return token
+
+
+def set_panel_api_token(settings: PanelSettings, token: str) -> None:
+    settings.panel_api_token = encrypt(token.strip()) if token and token.strip() else ""
+
+
+def has_panel_credentials(settings: PanelSettings) -> bool:
+    """True when the bot can talk to the panel (token or username/password)."""
+    if not settings.panel_url:
+        return False
+    return bool(get_panel_api_token(settings) or get_panel_password(settings))
+
+
+def panel_auth_mode(settings: PanelSettings) -> str:
+    """Human readable auth mode, for the admin status screen."""
+    if get_panel_api_token(settings):
+        return "توکن API"
+    if get_panel_password(settings):
+        return "نام کاربری و رمز"
+    return "تنظیم نشده"
 
 
 def get_selected_inbound_ids(settings: PanelSettings) -> List[int]:
@@ -120,8 +149,7 @@ def is_auto_provisioning_ready(settings: PanelSettings) -> bool:
         settings.provisioning_mode == PROVISIONING_AUTO
         and settings.is_verified
         and bool(settings.panel_url)
-        and bool(settings.panel_username)
-        and bool(get_panel_password(settings))
+        and has_panel_credentials(settings)
         and bool(settings.subscription_base_url)
         and bool(get_selected_inbound_ids(settings))
     )
@@ -129,12 +157,20 @@ def is_auto_provisioning_ready(settings: PanelSettings) -> bool:
 
 @asynccontextmanager
 async def xui_client_for_panel(settings: PanelSettings) -> AsyncIterator:
-    """Open an authenticated XUIClient from stored panel settings."""
+    """Open an authenticated XUIClient from stored panel settings.
+
+    An API token is preferred: bearer callers skip the panel's CSRF check and
+    the session login, so the bot never trips the panel's login limiter (5
+    failed logins in 5 minutes locks an ip/username out for 15 minutes).
+    The client falls back to the username/password session on its own if the
+    token is rejected.
+    """
     from app.xui.client import XUIClient
 
     async with XUIClient(
         settings.panel_url,
         settings.panel_username,
         get_panel_password(settings),
+        api_token=get_panel_api_token(settings),
     ) as client:
         yield client

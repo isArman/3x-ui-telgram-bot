@@ -76,6 +76,13 @@ async def _migrate_sqlite_columns(conn):
             )
         )
 
+    result = await conn.execute(text("PRAGMA table_info(panel_settings)"))
+    panel_cols = {row[1] for row in result.fetchall()}
+    if "panel_api_token" not in panel_cols:
+        await conn.execute(
+            text("ALTER TABLE panel_settings ADD COLUMN panel_api_token VARCHAR(255)")
+        )
+
     result = await conn.execute(text("PRAGMA table_info(vpn_accounts)"))
     vpn_cols = {row[1] for row in result.fetchall()}
     if "config_ref" not in vpn_cols and "xui_client_id" in vpn_cols:

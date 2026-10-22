@@ -131,6 +131,7 @@ async def test_send_accounts_list_fetches_account_from_panel_api():
         patch.object(user_handlers, "AsyncSessionLocal", return_value=Session()),
         patch.object(user_handlers, "get_panel_settings", new=AsyncMock(return_value=panel)),
         patch.object(user_handlers, "get_panel_password", return_value="secret"),
+        patch.object(user_handlers, "has_panel_credentials", return_value=True),
         patch.object(user_handlers, "xui_client_for_panel", panel_client_context),
     ):
         await user_handlers.send_accounts_list(event)

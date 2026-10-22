@@ -1,5 +1,40 @@
+"""
+Client for the 3x-ui panel API.
+
+Endpoints used (see the panel's own OpenAPI spec at
+``GET /panel/api/openapi.json``):
+
+===========================================  ======  ==========================
+Endpoint                                     Method  Purpose
+===========================================  ======  ==========================
+``/panel/api/clients/get/:email``           GET     one client + inbound ids
+``/panel/api/clients/traffic/:email``       GET     up/down traffic counters
+``/panel/api/clients/list``                 GET     every client + traffic
+``/panel/api/clients/add``                  POST    create a client
+``/panel/api/clients/update/:email``        POST    replace a client record
+``/panel/api/clients/:email/attach``        POST    attach to inbounds
+``/panel/api/clients/:email/detach``        POST    detach from inbounds
+``/panel/api/clients/bulkAdjust``           POST    add days / quota to clients
+``/panel/api/inbounds/list``                GET     configured inbounds
+``/panel/api/setting/all``                  POST    panel settings (subscription)
+``/panel/api/setting/apiTokens``            GET     list API tokens
+``/panel/api/setting/apiTokens/create``     POST    mint an API token
+===========================================  ======  ==========================
+
+Two authentication modes are supported:
+
+* **API token** (preferred) — ``Authorization: Bearer <token>``.  The panel
+  treats bearer callers as non-browser sessions and skips the CSRF check
+  entirely, so there is no session cookie, no CSRF token and no login.  It
+  also side-steps the panel's login limiter, which blocks an
+  (ip, username) pair for 15 minutes after 5 failed logins in 5 minutes.
+* **Username + password** (fallback) — the legacy session flow: log in, keep
+  the session cookie and echo the session's CSRF token on unsafe methods.
+"""
+
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Optional
 from urllib.parse import urlparse
 
@@ -16,6 +51,8 @@ class XUIError(Exception):
 # Concurrent device/IP limit enforced for every subscription (existing + new).
 DEFAULT_CLIENT_LIMIT_IP = 1
 
+# Admin-scoped API token: full access to the panel API, like the password.
+API_TOKEN_SCOPE_ADMIN = "admin"
 
 _NOT_FOUND_HINTS = (
     "record not found",
@@ -39,63 +76,132 @@ def _msg_is_stale_csrf(msg: str) -> bool:
     return "csrf" in lowered or any(hint in lowered for hint in _CSRF_HINTS[1:])
 
 
+# The panel's inbound-settings client shape. `POST /clients/update/:email`
+# replaces the stored row with exactly these fields, so a partial body wipes
+# the credentials of the client. Everything not listed here is dropped by the
+# server.
+CLIENT_RECORD_FIELDS = (
+    "adTag",
+    "allowedIPs",
+    "auth",
+    "comment",
+    "email",
+    "enable",
+    "expiryTime",
+    "flow",
+    "forwardedPorts",
+    "group",
+    "keepAlive",
+    "limitIp",
+    "password",
+    "preSharedKey",
+    "privateKey",
+    "publicKey",
+    "reset",
+    "resetDay",
+    "resetMax",
+    "resetWeekday",
+    "reverse",
+    "secret",
+    "security",
+    "subId",
+    "tgId",
+    "totalGB",
+    "trafficReset",
+    "trafficResetDay",
+)
+
+
 def prepare_client_update_payload(
     existing_detail: dict[str, Any],
     *,
     email: str,
-    total_bytes: int,
-    expiry_ms: int,
-    comment: str,
+    total_bytes: int | None = None,
+    expiry_ms: int | None = None,
+    comment: str | None = None,
     limit_ip: int = DEFAULT_CLIENT_LIMIT_IP,
 ) -> dict[str, Any]:
     """
-    Build the JSON body for POST /panel/api/clients/update/:email.
+    Build the JSON body for ``POST /panel/api/clients/update/:email``.
 
-    GET returns a numeric DB row id in client.id, but UPDATE expects the protocol
-    UUID as a string — sending the number triggers a Go unmarshal error.
+    The server *replaces* the client row with the body, so the payload has to
+    carry the whole record — sending only the changed fields would blank out
+    the client's auth/password and break the subscription.
+
+    The stored record uses ``id`` (numeric row id) and ``uuid`` (the protocol
+    UUID); the update endpoint expects the inbound-settings shape, where
+    ``id`` is that UUID string and the timestamps are named ``created_at`` /
+    ``updated_at``.
     """
     old = dict(existing_detail.get("client") or {})
-    payload: dict[str, Any] = {
-        "email": email,
-        "enable": bool(old.get("enable", True)),
-        "totalGB": total_bytes,
-        "expiryTime": expiry_ms,
-        "comment": comment,
-        "limitIp": int(limit_ip),
-        "tgId": old.get("tgId", 0),
-    }
 
-    for key in ("subId", "flow", "password", "auth"):
-        value = old.get(key)
-        if value not in (None, ""):
-            payload[key] = value
+    payload: dict[str, Any] = {}
+    for field in CLIENT_RECORD_FIELDS:
+        if field in old:
+            payload[field] = old[field]
 
-    protocol_id = old.get("id")
-    if isinstance(protocol_id, str) and protocol_id:
-        payload["id"] = protocol_id
-    else:
-        uuid_val = existing_detail.get("uuid") or old.get("uuid")
-        if uuid_val:
-            payload["id"] = str(uuid_val)
+    # id is the protocol UUID for the update endpoint.
+    uuid_value = old.get("uuid") or existing_detail.get("uuid")
+    if isinstance(uuid_value, str) and uuid_value:
+        payload["id"] = uuid_value
+    elif isinstance(old.get("id"), str) and old["id"]:
+        payload["id"] = old["id"]
+
+    if old.get("createdAt") is not None:
+        payload["created_at"] = old.get("createdAt")
+    if old.get("updatedAt") is not None:
+        payload["updated_at"] = old.get("updatedAt")
+
+    payload["email"] = email
+    if total_bytes is not None:
+        payload["totalGB"] = int(total_bytes)
+    if expiry_ms is not None:
+        payload["expiryTime"] = int(expiry_ms)
+    if comment is not None:
+        payload["comment"] = comment
+    if limit_ip is not None:
+        payload["limitIp"] = int(limit_ip)
 
     return payload
+
+
+@dataclass
+class ClientTraffic:
+    """Traffic counters for one client."""
+
+    up: int = 0
+    down: int = 0
+    total: int = 0
+
+    @property
+    def used(self) -> int:
+        return self.up + self.down
 
 
 class XUIClient:
     def __init__(
         self,
         base_url: str,
-        username: str,
-        password: str,
+        username: str = "",
+        password: str = "",
         *,
+        api_token: str | None = None,
         verify_ssl: bool | None = None,
     ):
         self.base_url = base_url.rstrip("/")
         self.username = username
         self.password = password
+        self.api_token = (api_token or "").strip()
         self.verify_ssl = settings.XUI_VERIFY_SSL if verify_ssl is None else verify_ssl
         self._client: Optional[httpx.AsyncClient] = None
         self._csrf_token_cache: str = ""
+        self._logged_in = False
+
+    # --- lifecycle ---------------------------------------------------------
+
+    @property
+    def uses_api_token(self) -> bool:
+        return bool(self.api_token)
 
     async def __aenter__(self) -> "XUIClient":
         self._client = httpx.AsyncClient(
@@ -103,7 +209,8 @@ class XUIClient:
             timeout=30.0,
             follow_redirects=True,
         )
-        await self.login()
+        if not self.uses_api_token:
+            await self.login()
         return self
 
     async def __aexit__(self, *args) -> None:
@@ -111,20 +218,21 @@ class XUIClient:
             await self._client.aclose()
             self._client = None
         self._csrf_token_cache = ""
+        self._logged_in = False
 
     def _url(self, path: str) -> str:
         if not path.startswith("/"):
             path = f"/{path}"
         return f"{self.base_url}{path}"
 
+    # --- authentication ----------------------------------------------------
+
     async def _csrf_token(self, *, force: bool = False) -> str:
         """
-        Return a CSRF token for this session, caching it in memory.
+        Return the session's CSRF token, caching it in memory.
 
-        The token stays valid for the life of the login session, so fetching it
-        once and reusing it removes one HTTP round-trip from every later write
-        (add/update/attach/detach/bulkAdjust). Pass force=True to refetch after
-        a request was rejected with a stale token.
+        Only the username/password flow needs this: bearer-token callers skip
+        the CSRF check on the panel side.
         """
         assert self._client
         if self._csrf_token_cache and not force:
@@ -140,43 +248,17 @@ class XUIClient:
     def _invalidate_csrf(self) -> None:
         self._csrf_token_cache = ""
 
-    async def _post_panel(
-        self,
-        path: str,
-        payload: dict[str, Any] | None = None,
-        *,
-        error_label: str = "request",
-    ) -> dict[str, Any]:
-        """
-        POST a panel API write and return the whole JSON envelope.
-
-        Reuses the cached CSRF token and, if the panel rejects the request with
-        a stale-token error, refetches the token once and retries the same call.
-        """
-        assert self._client
-        url = self._url(path)
-        for attempt in range(2):
-            token = await self._csrf_token(force=attempt == 1)
-            resp = await self._client.post(
-                url,
-                json=payload,
-                headers={"X-CSRF-Token": token},
-            )
-            if resp.status_code in (401, 403, 419) and attempt == 0:
-                self._invalidate_csrf()
-                continue
-            resp.raise_for_status()
-            data = resp.json()
-            if not data.get("success"):
-                msg = str(data.get("msg") or "")
-                if attempt == 0 and _msg_is_stale_csrf(msg):
-                    self._invalidate_csrf()
-                    continue
-                raise XUIError(msg or f"Failed to {error_label}")
-            return data
-        raise XUIError(f"Failed to {error_label} after CSRF refresh")
+    async def _headers(self, *, unsafe: bool) -> dict[str, str]:
+        headers: dict[str, str] = {}
+        if self.uses_api_token:
+            headers["Authorization"] = f"Bearer {self.api_token}"
+            return headers
+        if unsafe:
+            headers["X-CSRF-Token"] = await self._csrf_token()
+        return headers
 
     async def login(self) -> None:
+        """Log in with username/password and prime the session CSRF token."""
         assert self._client
         self._invalidate_csrf()
         await self._client.get(self._url("/"))
@@ -193,9 +275,116 @@ class XUIClient:
         # The authenticated session may issue its own CSRF token; drop the one
         # minted for the anonymous session so the next write mints a fresh one.
         self._invalidate_csrf()
+        self._logged_in = True
+
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        json: dict[str, Any] | None = None,
+        error_label: str = "request",
+    ) -> dict[str, Any]:
+        """
+        Perform an authenticated API call and return the JSON envelope.
+
+        With a bearer token there is nothing to refresh, so a failure is final.
+        With the session flow a 401 means the session died and a 403 usually
+        means the CSRF token went stale; both are retried once.
+        """
+        assert self._client
+        url = self._url(path)
+        unsafe = method.upper() not in ("GET", "HEAD", "OPTIONS", "TRACE")
+
+        for attempt in range(2):
+            headers = await self._headers(unsafe=unsafe)
+            if method.upper() == "GET":
+                if headers:
+                    resp = await self._client.get(url, headers=headers)
+                else:
+                    resp = await self._client.get(url)
+            else:
+                resp = await self._client.post(url, json=json, headers=headers)
+
+            if attempt == 0:
+                if self.uses_api_token and resp.status_code in (401, 403):
+                    # The token was rejected (expired, disabled, wrong scope or
+                    # an older panel without token support). Drop it and fall
+                    # back to the session login for this and every later call.
+                    logger.warning(
+                        "Panel API token rejected (HTTP %s) — falling back to "
+                        "password login",
+                        resp.status_code,
+                    )
+                    self.api_token = ""
+                    self._invalidate_csrf()
+                    try:
+                        await self.login()
+                    except Exception as exc:  # pragma: no cover - network
+                        logger.warning("Panel fallback login failed: %s", exc)
+                    continue
+                if not self.uses_api_token:
+                    if resp.status_code in (401, 419):
+                        # Session expired — log in again and retry once.
+                        try:
+                            await self.login()
+                        except Exception as exc:  # pragma: no cover - network
+                            logger.warning("Panel re-login failed: %s", exc)
+                        continue
+                    if resp.status_code == 403:
+                        # Stale CSRF token — mint a fresh one and retry once.
+                        self._invalidate_csrf()
+                        continue
+
+            resp.raise_for_status()
+            try:
+                data = resp.json()
+            except ValueError as exc:
+                raise XUIError(
+                    f"Panel returned non-JSON for {error_label} "
+                    f"(HTTP {resp.status_code})"
+                ) from exc
+
+            if not data.get("success"):
+                msg = str(data.get("msg") or "")
+                if attempt == 0 and not self.uses_api_token and _msg_is_stale_csrf(msg):
+                    self._invalidate_csrf()
+                    continue
+                raise XUIError(msg or f"Failed to {error_label}")
+            return data
+
+        raise XUIError(f"Failed to {error_label}")
+
+    async def _get(self, path: str, *, error_label: str = "request") -> dict[str, Any]:
+        return await self._request("GET", path, error_label=error_label)
+
+    async def _post_panel(
+        self,
+        path: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        error_label: str = "request",
+    ) -> dict[str, Any]:
+        return await self._request(
+            "POST", path, json=payload, error_label=error_label
+        )
+
+    _post = _post_panel
+
+    # --- panel metadata ----------------------------------------------------
+
+    async def fetch_settings(self) -> dict[str, Any]:
+        """Read every panel setting (``POST /panel/api/setting/all``)."""
+        data = await self._post(
+            "/panel/api/setting/all", None, error_label="fetch panel settings"
+        )
+        return data.get("obj") or {}
+
+    async def get_subscription_base_url(self) -> str:
+        return resolve_subscription_base_url(await self.fetch_settings(), self.base_url)
 
     async def test_connection(self) -> dict[str, Any]:
-        """Login and return a short summary (inbound count + subscription base)."""
+        """Return a short summary of the panel state."""
         inbounds = await self.list_inbounds()
         enabled = [ib for ib in inbounds if ib.get("enable")]
         panel_settings = await self.fetch_settings()
@@ -206,27 +395,51 @@ class XUIClient:
             "inbounds": inbounds,
             "subscription_base_url": sub_base,
             "sub_enable": panel_settings.get("subEnable", False),
+            "auth_mode": "api_token" if self.uses_api_token else "password",
         }
 
-    async def fetch_settings(self) -> dict[str, Any]:
-        assert self._client
-        data = await self._post_panel(
-            "/panel/api/setting/all", None, error_label="fetch panel settings"
-        )
-        return data.get("obj") or {}
+    # --- API tokens --------------------------------------------------------
 
-    async def get_subscription_base_url(self) -> str:
-        settings = await self.fetch_settings()
-        return resolve_subscription_base_url(settings, self.base_url)
+    async def list_api_tokens(self) -> list[dict[str, Any]]:
+        """List the panel's API tokens (metadata only — never the value)."""
+        data = await self._get(
+            "/panel/api/setting/apiTokens", error_label="list API tokens"
+        )
+        obj = data.get("obj") or []
+        return obj if isinstance(obj, list) else []
+
+    async def create_api_token(
+        self,
+        name: str,
+        *,
+        scope: str = API_TOKEN_SCOPE_ADMIN,
+        expires_at: int = 0,
+    ) -> str:
+        """
+        Mint an API token and return its plaintext (shown only once).
+
+        The panel stores a SHA-256 hash, so the caller has to persist the
+        plaintext immediately.
+        """
+        data = await self._post(
+            "/panel/api/setting/apiTokens/create",
+            {"name": name, "scope": scope, "expiresAt": int(expires_at)},
+            error_label="create API token",
+        )
+        obj = data.get("obj") or {}
+        token = obj.get("token") or obj.get("value") or obj.get("apiToken")
+        if not token:
+            raise XUIError("Panel did not return an API token")
+        return str(token)
+
+    # --- inbounds ----------------------------------------------------------
 
     async def list_inbounds(self) -> list[dict[str, Any]]:
-        assert self._client
-        resp = await self._client.get(self._url("/panel/api/inbounds/list"))
-        resp.raise_for_status()
-        data = resp.json()
-        if not data.get("success"):
-            raise XUIError(data.get("msg") or "Failed to list inbounds")
-        return data.get("obj") or []
+        data = await self._get("/panel/api/inbounds/list", error_label="list inbounds")
+        obj = data.get("obj") or []
+        return obj if isinstance(obj, list) else []
+
+    # --- clients -----------------------------------------------------------
 
     async def get_client(self, email: str) -> Optional[dict[str, Any]]:
         """
@@ -235,41 +448,51 @@ class XUIClient:
         can never be mistaken for "client does not exist" (which would create a
         duplicate client).
 
-        The panel answers 200 + success:false for both a missing client (gorm's
-        "record not found") and real errors, so the message is inspected to tell
-        the two apart.
+        The panel answers a missing client with ``success: false`` and a
+        "record not found" message rather than a 404, so the message decides.
         """
-        assert self._client
-        resp = await self._client.get(
-            self._url(f"/panel/api/clients/get/{email}")
-        )
-        if resp.status_code == 404:
-            return None
         try:
-            data = resp.json()
-        except ValueError:
-            raise XUIError(
-                f"Panel returned non-JSON for client lookup (HTTP {resp.status_code})"
+            data = await self._get(
+                f"/panel/api/clients/get/{email}", error_label=f"fetch client {email}"
             )
-        if data.get("success") is False:
-            msg = str(data.get("msg") or "")
-            if _msg_is_not_found(msg):
+        except XUIError as exc:
+            if _msg_is_not_found(str(exc)):
                 return None
-            raise XUIError(msg or f"Failed to fetch client {email}")
-        return data.get("obj")
+            raise
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                return None
+            raise
+        obj = data.get("obj")
+        if obj is None:
+            return None
+        return obj
+
+    async def get_client_traffic(self, email: str) -> ClientTraffic:
+        """Read the up/down counters for one client."""
+        data = await self._get(
+            f"/panel/api/clients/traffic/{email}",
+            error_label=f"fetch traffic for {email}",
+        )
+        obj = data.get("obj") or {}
+        if not isinstance(obj, dict):
+            return ClientTraffic()
+        return ClientTraffic(
+            up=int(obj.get("up") or 0),
+            down=int(obj.get("down") or 0),
+            total=int(obj.get("total") or 0),
+        )
 
     async def list_clients(self) -> list[dict[str, Any]]:
-        """Return panel client records from GET /panel/api/clients/list."""
-        assert self._client
-        resp = await self._client.get(self._url("/panel/api/clients/list"))
-        resp.raise_for_status()
-        data = resp.json()
-        if not data.get("success"):
-            raise XUIError(data.get("msg") or "Failed to list clients")
+        """
+        List every client on the panel with its inbound ids and traffic.
+
+        One request replaces the previous "one ``clients/get`` call per user"
+        sweep, which mattered on a panel with ~90 clients.
+        """
+        data = await self._get("/panel/api/clients/list", error_label="list clients")
         obj = data.get("obj") or []
-        if not isinstance(obj, list):
-            raise XUIError("Unexpected clients/list payload")
-        return obj
+        return obj if isinstance(obj, list) else []
 
     async def add_client(
         self,
@@ -281,7 +504,6 @@ class XUIClient:
         *,
         limit_ip: int = DEFAULT_CLIENT_LIMIT_IP,
     ) -> dict[str, Any]:
-        assert self._client
         payload = {
             "client": {
                 "email": email,
@@ -294,7 +516,7 @@ class XUIClient:
             },
             "inboundIds": inbound_ids,
         }
-        await self._post_panel(
+        await self._post(
             "/panel/api/clients/add", payload, error_label="add client"
         )
         detail = await self.get_client(email)
@@ -308,7 +530,6 @@ class XUIClient:
         inbound_ids: list[int],
     ) -> dict[str, Any]:
         """Attach missing inbounds and detach ones no longer selected."""
-        assert self._client
         detail = await self.get_client(email)
         if not detail:
             raise XUIError(f"Client {email} not found")
@@ -319,14 +540,14 @@ class XUIClient:
         extra = sorted(current_ids - desired_ids)
 
         if missing:
-            await self._post_panel(
+            await self._post(
                 f"/panel/api/clients/{email}/attach",
                 {"inboundIds": missing},
                 error_label=f"attach client {email} to inbounds {missing}",
             )
 
         if extra:
-            await self._post_panel(
+            await self._post(
                 f"/panel/api/clients/{email}/detach",
                 {"inboundIds": extra},
                 error_label=f"detach client {email} from inbounds {extra}",
@@ -343,13 +564,17 @@ class XUIClient:
         client_payload: dict[str, Any],
         inbound_ids: list[int],
     ) -> dict[str, Any]:
-        assert self._client
-        await self._post_panel(
+        """
+        Replace a client record.
+
+        The panel replaces the whole row, so ``client_payload`` must be a
+        complete record — see :func:`prepare_client_update_payload`.
+        """
+        await self._post(
             f"/panel/api/clients/update/{email}",
             client_payload,
             error_label="update client",
         )
-
         return await self.sync_client_inbounds(email, inbound_ids)
 
     async def bulk_adjust(
@@ -360,16 +585,16 @@ class XUIClient:
         add_bytes: int = 0,
     ) -> dict[str, Any]:
         """
-        Shift expiry and/or quota for existing clients atomically on the panel.
+        Shift expiry and/or quota for many clients in one call.
 
-        POST /panel/api/clients/bulkAdjust applies addDays/addBytes as deltas in
-        one server-side read-modify-write, so there is no client-side
-        read-modify-write race. The panel also re-enables a client that was
-        auto-disabled solely because it was depleted once the adjustment lifts
-        it out of depletion, and skips the expiry/traffic field when it is
-        unlimited (0) instead of narrowing it.
+        ``POST /panel/api/clients/bulkAdjust`` applies addDays/addBytes as
+        deltas in one server-side read-modify-write, so there is no
+        client-side read-modify-write race. The panel also re-enables a client
+        that was auto-disabled solely because it was depleted once the
+        adjustment lifts it out of depletion, and skips the expiry/traffic
+        field when it is unlimited (0) instead of narrowing it.
 
-        Returns {"adjusted": int, "skipped": [{"email", "reason"}, ...]}.
+        Returns ``{"adjusted": int, "skipped": [{"email", "reason"}, ...]}``.
         """
         if not emails:
             return {"adjusted": 0, "skipped": []}
@@ -382,8 +607,7 @@ class XUIClient:
             "addBytes": int(add_bytes),
         }
 
-        assert self._client
-        data = await self._post_panel(
+        data = await self._post(
             "/panel/api/clients/bulkAdjust",
             payload,
             error_label="bulk-adjust clients",
@@ -407,9 +631,6 @@ class XUIClient:
         payload = prepare_client_update_payload(
             detail,
             email=email,
-            total_bytes=int(client.get("totalGB") or 0),
-            expiry_ms=int(client.get("expiryTime") or 0),
-            comment=str(client.get("comment") or ""),
             limit_ip=limit_ip,
         )
         inbound_ids = [int(i) for i in (detail.get("inboundIds") or [])]
@@ -429,8 +650,11 @@ def resolve_subscription_base_url(
     panel_url: str,
 ) -> str:
     """
-    Build subscription base URL from 3x-ui panel settings (Settings → Subscription).
-    Returns URL ending with / — append subId for the full subscription link.
+    Build the subscription base URL from the panel settings.
+
+    The panel serves subscriptions from ``subPath`` on ``subPort`` (optionally
+    on a dedicated ``subDomain``), or from an explicit ``subURI`` override.
+    The result ends with ``/`` — append the client's subId for the full link.
     """
     if not panel_settings.get("subEnable", False):
         raise XUIError(

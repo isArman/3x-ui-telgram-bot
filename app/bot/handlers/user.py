@@ -44,11 +44,16 @@ from app.services.wallet import (
 )
 from app.services.order_fulfillment import fulfill_paid_order
 from app.services.panel_settings import (
+    get_panel_api_token,
     get_panel_password,
     get_panel_settings,
+    has_panel_credentials,
+    panel_auth_mode,
+    set_panel_api_token,
+    set_panel_password,
     xui_client_for_panel,
 )
-from app.services.traffic_usage import format_gb
+from app.services.traffic_usage import format_gb, client_record, used_bytes
 from app.xui.client import build_subscription_url
 from app.services.referral import (
     apply_purchase_discount,
@@ -1194,11 +1199,10 @@ def format_panel_account_text(
     *,
     now: datetime | None = None,
 ) -> str:
-    client = detail.get("client") or {}
-    traffic = detail.get("traffic") or {}
+    client = client_record(detail)
     now = now or datetime.now(timezone.utc)
     total_bytes = int(client.get("totalGB") or 0)
-    used_bytes = int(traffic.get("up") or 0) + int(traffic.get("down") or 0)
+    used = used_bytes(detail)
     expiry_ms = int(client.get("expiryTime") or 0)
     expires_at = (
         datetime.fromtimestamp(expiry_ms / 1000, timezone.utc) if expiry_ms > 0 else None
@@ -1206,7 +1210,7 @@ def format_panel_account_text(
 
     if expires_at and expires_at <= now:
         status = "منقضی شده"
-    elif total_bytes > 0 and used_bytes >= total_bytes:
+    elif total_bytes > 0 and used >= total_bytes:
         status = "حجم تمام شده"
     elif not client.get("enable", True):
         status = "غیرفعال"
@@ -1214,14 +1218,14 @@ def format_panel_account_text(
         status = "فعال"
 
     if total_bytes > 0:
-        remaining_bytes = max(total_bytes - used_bytes, 0)
+        remaining_bytes = max(total_bytes - used, 0)
         traffic_text = (
             f"حجم کل: {format_gb(total_bytes)} گیگابایت\n"
-            f"مصرف‌شده: {format_gb(used_bytes)} گیگابایت\n"
+            f"مصرف‌شده: {format_gb(used)} گیگابایت\n"
             f"باقی‌مانده: {format_gb(remaining_bytes)} گیگابایت"
         )
     else:
-        traffic_text = f"حجم: نامحدود\nمصرف‌شده: {format_gb(used_bytes)} گیگابایت"
+        traffic_text = f"حجم: نامحدود\nمصرف‌شده: {format_gb(used)} گیگابایت"
 
     if expires_at:
         expires_text = expires_at.strftime("%Y-%m-%d")
@@ -1297,15 +1301,19 @@ async def send_accounts_list(event: Message | CallbackQuery) -> None:
 
     async with AsyncSessionLocal() as session:
         panel = await get_panel_settings(session)
-        panel_ready = bool(
-            panel.panel_url and panel.panel_username and get_panel_password(panel)
-        )
+        panel_ready = has_panel_credentials(panel)
         subscription_base_url = panel.subscription_base_url
         detail = None
         if panel_ready:
             try:
                 async with xui_client_for_panel(panel) as client:
                     detail = await client.get_client(str(user_id))
+                    # Read the subscription base from the panel so a change to
+                    # the panel's subscription settings is picked up here.
+                    try:
+                        subscription_base_url = await client.get_subscription_base_url()
+                    except Exception:
+                        pass
             except Exception as exc:
                 # A panel outage must not hide the accounts we already delivered.
                 logger.warning("Panel lookup failed for user %s: %s", user_id, exc)
@@ -1323,17 +1331,16 @@ async def send_accounts_list(event: Message | CallbackQuery) -> None:
         # No panel (manual mode) or no panel client for this user: fall back to
         # the stored accounts so the subscription link is always reachable.
         accounts = await _load_db_accounts(session, user_id)
-
-    if accounts:
-        await bot.send_message(
-            chat_id=chat_id,
-            text=format_db_accounts_text(accounts),
-            reply_markup=accounts_list_keyboard(
-                account_ids=[account.id for account in accounts]
-            ),
-        )
-        logger.info("User %s viewed %s stored account(s)", user_id, len(accounts))
-        return
+        if accounts:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=format_db_accounts_text(accounts),
+                reply_markup=accounts_list_keyboard(
+                    account_ids=[account.id for account in accounts]
+                ),
+            )
+            logger.info("User %s viewed %s stored account(s)", user_id, len(accounts))
+            return
 
     await bot.send_message(
         chat_id=chat_id,

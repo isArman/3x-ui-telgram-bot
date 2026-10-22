@@ -161,15 +161,46 @@ LOG_LEVEL=INFO
 1. **⚙️ پنل ادمین** → **🔗 پنل 3x-ui**
 2. **⚙️ تنظیم اتصال پنل** — URL، username، password
 3. ربات اتصال را تست می‌کند و آدرس subscription را از پنل می‌خواند
-4. **📡 بروزرسانی Inboundها** — inboundهای مورد نظر را انتخاب کنید
-5. **حالت ارسال** را روی **🤖 خودکار** بگذارید
+4. ربات یک **توکن API** برای خودش می‌سازد و ذخیره می‌کند
+5. **📡 بروزرسانی Inboundها** — inboundهای مورد نظر را انتخاب کنید
+6. **حالت ارسال** را روی **🤖 خودکار** بگذارید
+
+### احراز هویت با پنل
+
+ربات از **API Token** استفاده می‌کند (`Authorization: Bearer <token>`):
+
+- در پنل، درخواست‌های Bearer هم CSRF را رد می‌کنند و هم نیازی به session/login ندارند
+- پنل بعد از **۵ تلاش ناموفق لاگین در ۵ دقیقه**، آن `ip/username` را **۱۵ دقیقه** قفل می‌کند — با توکن این اتفاق اصلاً نمی‌افتد
+- اگر توکن حذف/منقضی شود، ربات خودکار به لاگین با نام کاربری و رمز برمی‌گردد
+- توکن‌ها رمزنگاری‌شده در دیتابیس ذخیره می‌شوند (همان روش پسورد پنل)
+
+> **توکن رایگان:** در **🔗 پنل 3x-ui** → **ساخت دوباره توکن API** می‌توانید توکن تازه بسازید.
+> توکن‌های قبلی در پنل (Settings → API Tokens) را می‌توانید حذف کنید.
 
 ### رفتار auto-provision
 
 - Email کلاینت = Telegram user ID
-- Comment = پروفایل تلگرام (id, username, name)
-- خرید مجدد = **آپدیت** همان کلاینت
+- Comment = پروفایل تلگرام (id، username، name)
+- خرید مجدد = **آپدیت** همان کلاینت (پنل یک کلاینت برای هر کاربر نگه می‌دارد)
+- تمدید = `bulkAdjust` روی همان کلاینت (افزودن روز/حجم، اتمی، سمت پنل)
 - خطا → fallback به انبار دستی → ارسال دستی
+
+### API پنل که ربات استفاده می‌کند
+
+| Endpoint | کاربرد |
+|---|---|
+| `GET /panel/api/clients/get/:email` | یک کلاینت + inboundها + `usedTraffic` |
+| `GET /panel/api/clients/traffic/:email` | شمارنده‌های `up`/`down` |
+| `GET /panel/api/clients/list` | همه کلاینت‌ها با ترافیک (یک درخواست برای کل پنل) |
+| `POST /panel/api/clients/add` | ساخت کلاینت |
+| `POST /panel/api/clients/update/:email` | جایگزینی کامل رکورد کلاینت |
+| `POST /panel/api/clients/:email/attach` · `detach` | اتصال/قطع از inbound |
+| `POST /panel/api/clients/bulkAdjust` | افزودن روز/حجم (تمدید) |
+| `GET /panel/api/inbounds/list` | inboundهای فعال |
+| `POST /panel/api/setting/all` | تنظیمات پنل (آدرس subscription) |
+| `GET`·`POST /panel/api/setting/apiTokens` | مدیریت توکن API |
+
+> **نکته:** `POST /clients/update/:email` رکورد را **جایگزین** می‌کند، نه patch — به همین دلیل ربات همیشه کل رکورد را می‌فرستد تا `auth`/`password`/`subId` پاک نشوند.
 
 ---
 

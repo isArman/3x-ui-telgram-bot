@@ -21,10 +21,14 @@ from app.database.session import AsyncSessionLocal
 from app.services.panel_settings import (
     PROVISIONING_AUTO,
     PROVISIONING_MANUAL,
+    get_panel_api_token,
     get_panel_password,
     get_panel_settings,
     get_selected_inbound_ids,
+    has_panel_credentials,
+    panel_auth_mode,
     prune_selected_inbound_ids,
+    set_panel_api_token,
     set_panel_password,
     toggle_inbound_id,
     xui_client_for_panel,
@@ -53,6 +57,7 @@ async def _panel_status_text(session) -> str:
         "تنظیمات پنل 3x-ui\n",
         f"وضعیت اتصال: {verified}",
         f"حالت ارسال کانفیگ: {mode}",
+        f"احراز هویت: {panel_auth_mode(ps)}",
     ]
     if ps.panel_url:
         lines.append(f"URL: {ps.panel_url}")
@@ -280,11 +285,30 @@ async def panel_receive_password(message: Message, state: FSMContext):
         ps.is_verified = True
         await session.commit()
 
+    # Mint an API token for future calls. Bearer callers skip both the CSRF
+    # check and the session login, so the bot never trips the panel's login
+    # limiter (5 failed logins in 5 minutes locks an ip/username out for 15).
+    token_note = ""
+    try:
+        async with XUIClient(panel_url, panel_username, panel_password) as client:
+            token = await client.create_api_token("vpn-telegram-bot")
+        async with AsyncSessionLocal() as session:
+            ps = await get_panel_settings(session)
+            set_panel_api_token(ps, token)
+            await session.commit()
+        token_note = "\nتوکن API ساخته شد و از این پس اتصال با آن انجام می‌شود."
+    except Exception as exc:
+        logger.warning("Could not mint a panel API token: %s", exc)
+        token_note = (
+            "\n(توکن API ساخته نشد — اتصال با نام کاربری و رمز ادامه می‌یابد.)"
+        )
+
     await state.clear()
     await message.answer(
         "اتصال موفق بود و تنظیمات ذخیره شد.\n\n"
         f"Inbound فعال: {summary['enabled_inbounds']} / {summary['total_inbounds']}\n"
-        f"Subscription (خوانده‌شده از پنل):\n`{sub_base}`\n\n"
+        f"Subscription (خوانده‌شده از پنل):\n`{sub_base}`\n"
+        f"{token_note}\n\n"
         "از منوی «پنل 3x-ui» → «بروزرسانی Inboundها» inboundها را انتخاب کنید.\n"
         "سپس حالت ارسال را روی «خودکار» بگذارید.",
         parse_mode="Markdown",
@@ -347,6 +371,46 @@ async def panel_receive_subscription_base(message: Message, state: FSMContext):
         )
 
 
+@router.callback_query(F.data == "admin:panel:token")
+async def panel_regenerate_token(callback: CallbackQuery):
+    """Mint a fresh panel API token and store it (replaces the old one)."""
+    if not is_admin(callback.from_user.id):
+        await deny_non_admin_callback(callback)
+        return
+
+    async with AsyncSessionLocal() as session:
+        ps = await get_panel_settings(session)
+        if not ps.panel_url or not ps.panel_username:
+            await callback.answer("پنل تنظیم نشده.", show_alert=True)
+            return
+        password = get_panel_password(ps)
+        if not password:
+            await callback.answer("رمز پنل موجود نیست.", show_alert=True)
+            return
+        url = ps.panel_url
+        username = ps.panel_username
+
+    await callback.answer("در حال ساخت توکن…")
+    try:
+        async with XUIClient(url, username, password) as client:
+            token = await client.create_api_token("vpn-telegram-bot")
+    except Exception as exc:
+        logger.error("Could not mint a panel API token: %s", exc)
+        await callback.message.answer(f"ساخت توکن ناموفق بود: {exc}")
+        return
+
+    async with AsyncSessionLocal() as session:
+        ps = await get_panel_settings(session)
+        set_panel_api_token(ps, token)
+        await session.commit()
+        text = await _panel_status_text(session)
+
+    await callback.message.answer(
+        "توکن API جدید ساخته و ذخیره شد.\n\n" + text,
+        reply_markup=panel_menu_keyboard(ps.provisioning_mode, ps.is_verified),
+    )
+
+
 @router.callback_query(F.data == "admin:panel:test")
 async def panel_test_connection(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
@@ -355,7 +419,7 @@ async def panel_test_connection(callback: CallbackQuery):
 
     async with AsyncSessionLocal() as session:
         ps = await get_panel_settings(session)
-        if not ps.panel_url or not ps.panel_username or not get_panel_password(ps):
+        if not has_panel_credentials(ps):
             await callback.answer("پنل تنظیم نشده.", show_alert=True)
             return
         try:

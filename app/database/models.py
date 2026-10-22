@@ -135,6 +135,7 @@ class PanelSettings(Base):
     panel_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     panel_username: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     panel_password: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    panel_api_token: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     subscription_base_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     provisioning_mode: Mapped[str] = mapped_column(String(20), default="manual")
     selected_inbound_ids: Mapped[str] = mapped_column(Text, default="[]")

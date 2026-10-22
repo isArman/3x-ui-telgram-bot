@@ -173,10 +173,13 @@ async def test_low_traffic_notification(mock_xui_ctx, _mock_ready):
     await init_db()
     bot_mock = AsyncMock()
     panel_client = AsyncMock()
-    panel_client.get_client.return_value = {
-        "client": {"totalGB": 10 * GB},
-        "traffic": {"up": int(9.2 * GB), "down": 0},
-    }
+    panel_client.list_clients.return_value = [
+        {
+            "email": "444444",
+            "totalGB": 10 * GB,
+            "traffic": {"up": int(9.2 * GB), "down": 0},
+        }
+    ]
     mock_xui_ctx.return_value = _FakeXuiContext(panel_client)
 
     async with AsyncSessionLocal() as session:
@@ -222,10 +225,13 @@ async def test_low_traffic_skips_when_enough_remaining(mock_xui_ctx, _mock_ready
     await init_db()
     bot_mock = AsyncMock()
     panel_client = AsyncMock()
-    panel_client.get_client.return_value = {
-        "client": {"totalGB": 10 * GB},
-        "traffic": {"up": 5 * GB, "down": 0},
-    }
+    panel_client.list_clients.return_value = [
+        {
+            "email": "555555",
+            "totalGB": 10 * GB,
+            "traffic": {"up": 5 * GB, "down": 0},
+        }
+    ]
     mock_xui_ctx.return_value = _FakeXuiContext(panel_client)
 
     async with AsyncSessionLocal() as session:

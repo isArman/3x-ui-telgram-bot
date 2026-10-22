@@ -13,6 +13,7 @@ from app.services.panel_settings import (
     prune_selected_inbound_ids,
     xui_client_for_panel,
 )
+from app.services.traffic_usage import client_record
 from app.utils.client_identity import build_client_comment, panel_client_email
 from app.utils.logger import logger
 from app.xui.client import XUIClient, XUIError, build_subscription_url
@@ -146,7 +147,7 @@ async def provision_subscription_detailed(
                 return None
 
             existing_client = await client.get_client(email)
-            client_data = (existing_client or {}).get("client") or {}
+            client_data = client_record(existing_client or {})
 
             if client_data:
                 # Extend rather than reset: bulkAdjust is an atomic
@@ -192,7 +193,7 @@ async def provision_subscription_detailed(
         logger.error("Unexpected provisioning error for order %s: %s", order.id, exc)
         return None
 
-    client_data = detail.get("client") or {}
+    client_data = client_record(detail)
     sub_id = client_data.get("subId")
     if not sub_id:
         logger.error("3x-ui client has no subId for order %s", order.id)

@@ -9,6 +9,7 @@ from app.bot.keyboards.user import usage_alert_keyboard
 from app.database.models import Order, User, VPNAccount
 from app.database.session import AsyncSessionLocal, init_db
 from app.services.renewal import extend_vpn_account
+from app.services.traffic_usage import GB
 from app.utils.notifications import EXPIRY_WARNING_DAYS, check_expiring_accounts
 
 
@@ -149,10 +150,13 @@ async def test_low_traffic_alert_is_actionable(mock_xui_ctx, _mock_ready):
     await init_db()
     bot_mock = AsyncMock()
     panel_client = AsyncMock()
-    panel_client.get_client.return_value = {
-        "client": {"totalGB": 10 * 1024**3},
-        "traffic": {"up": int(9.5 * 1024**3), "down": 0},
-    }
+    panel_client.list_clients.return_value = [
+        {
+            "email": "700703",
+            "totalGB": 10 * GB,
+            "traffic": {"up": int(9.1 * GB), "down": 0},
+        }
+    ]
 
     class _Ctx:
         async def __aenter__(self):

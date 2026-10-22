@@ -96,7 +96,12 @@ async def check_expiring_accounts(session: AsyncSession, bot: Bot) -> int:
 
 
 async def check_low_traffic_accounts(session: AsyncSession, bot: Bot) -> int:
-    """Alert accounts whose remaining panel traffic is below the threshold."""
+    """Alert accounts whose remaining panel traffic is below the threshold.
+
+    The panel is queried once with ``clients/list`` and the result is filtered
+    down to the clients this bot owns, instead of one ``clients/get`` call per
+    account.
+    """
 
     panel = await get_panel_settings(session)
     if not is_auto_provisioning_ready(panel):
@@ -108,63 +113,60 @@ async def check_low_traffic_accounts(session: AsyncSession, bot: Bot) -> int:
             VPNAccount.is_active == True,
             VPNAccount.expires_at > now,
             VPNAccount.traffic_low_notified == False,
+            # Only panel-backed accounts have traffic counters on the panel.
+            VPNAccount.config_ref == "xui-auto",
         )
     )
     accounts = result.scalars().all()
     if not accounts:
         return 0
 
+    # The panel's client email is the Telegram user id.
+    by_email = {str(account.user_id): account for account in accounts}
+
     notified_count = 0
 
     try:
         async with xui_client_for_panel(panel) as client:
-            for account in accounts:
-                try:
-                    detail = await client.get_client(str(account.user_id))
-                    if not detail:
-                        continue
+            for item in await client.list_clients():
+                account = by_email.get(str(item.get("email") or ""))
+                if account is None:
+                    continue
 
-                    parsed = parse_client_traffic(detail)
-                    if parsed is None:
-                        continue
+                parsed = parse_client_traffic(item)
+                if parsed is None:
+                    continue
+                total_bytes, used = parsed
+                if not is_low_traffic(total_bytes, used):
+                    continue
 
-                    total_bytes, used_bytes = parsed
-                    if not is_low_traffic(total_bytes, used_bytes):
-                        continue
+                remaining_bytes = max(total_bytes - used, 0)
+                remaining_pct = remaining_traffic_percent(total_bytes, used)
 
-                    remaining_bytes = max(total_bytes - used_bytes, 0)
-                    remaining_pct = remaining_traffic_percent(total_bytes, used_bytes)
+                message = (
+                    "حجم اکانت شما در حال تمام شدن است.\n\n"
+                    f"شماره سفارش: #{account.order_id}\n"
+                    f"حجم کل: {format_gb(total_bytes)} GB\n"
+                    f"مصرف شده: {format_gb(used)} GB\n"
+                    f"باقی‌مانده: {format_gb(remaining_bytes)} GB "
+                    f"(حدود {remaining_pct:.0f}٪)\n\n"
+                    "با دکمه زیر می‌توانید همین‌جا تمدید کنید."
+                )
 
-                    message = (
-                        "حجم اکانت شما در حال تمام شدن است.\n\n"
-                        f"شماره سفارش: #{account.order_id}\n"
-                        f"حجم کل: {format_gb(total_bytes)} GB\n"
-                        f"مصرف شده: {format_gb(used_bytes)} GB\n"
-                        f"باقی‌مانده: {format_gb(remaining_bytes)} GB "
-                        f"(حدود {remaining_pct:.0f}٪)\n\n"
-                        "با دکمه زیر می‌توانید همین‌جا تمدید کنید."
-                    )
+                await bot.send_message(
+                    chat_id=account.user_id,
+                    text=message,
+                    reply_markup=usage_alert_keyboard(account.id),
+                )
+                account.traffic_low_notified = True
+                notified_count += 1
 
-                    await bot.send_message(
-                        chat_id=account.user_id,
-                        text=message,
-                        reply_markup=usage_alert_keyboard(account.id),
-                    )
-                    account.traffic_low_notified = True
-                    notified_count += 1
+                logger.info(
+                    "Sent low-traffic alert for account %s to user %s",
+                    account.id,
+                    account.user_id,
+                )
 
-                    logger.info(
-                        "Sent low-traffic alert for account %s to user %s",
-                        account.id,
-                        account.user_id,
-                    )
-
-                except Exception as exc:
-                    logger.error(
-                        "Failed low-traffic check for account %s: %s",
-                        account.id,
-                        exc,
-                    )
     except Exception as exc:
         logger.error("Low-traffic alert run failed: %s", exc)
         return 0
