@@ -7,7 +7,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import PanelSettings
-from app.utils.encryption import decrypt_if_needed, encrypt, _looks_encrypted
+from app.utils.encryption import (
+    InvalidToken,
+    decrypt,
+    decrypt_if_needed,
+    encrypt,
+    _looks_encrypted,
+)
 
 PROVISIONING_MANUAL = "manual"
 PROVISIONING_AUTO = "auto"
@@ -50,14 +56,25 @@ def get_panel_password(settings: PanelSettings) -> str:
 
 
 def repair_panel_password(settings: PanelSettings) -> bool:
-    """Re-encrypt password once if DB has nested encryption. Returns True if repaired."""
-    pwd = decrypt_if_needed(settings.panel_password or "")
-    if not pwd or _looks_encrypted(pwd):
+    """
+    Re-encrypt a password that was encrypted more than once. Returns True if repaired.
+
+    Fernet blobs are non-deterministic, so re-encrypting a healthy value would
+    never compare equal to the stored one and would rewrite the row on every
+    read. Only a still-encrypted payload after one unwrap means the value was
+    double-encrypted and really needs repairing.
+    """
+    blob = settings.panel_password or ""
+    if not blob or not _looks_encrypted(blob):
         return False
-    clean = encrypt(pwd)
-    if settings.panel_password == clean:
+    try:
+        inner = decrypt(blob)
+    except (InvalidToken, ValueError, TypeError):
         return False
-    settings.panel_password = clean
+    if not _looks_encrypted(inner):
+        # Correctly encrypted once — nothing to repair.
+        return False
+    settings.panel_password = encrypt(inner)
     return True
 
 

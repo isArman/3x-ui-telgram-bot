@@ -5,6 +5,49 @@ from sqlalchemy import select, text
 
 from app.database.models import Order, User, VPNAccount
 from app.database.session import AsyncSessionLocal, engine, init_db
+from app.services.panel_settings import (
+    get_panel_settings,
+    repair_panel_password,
+    set_panel_password,
+)
+from app.utils.encryption import encrypt
+
+
+@pytest.mark.asyncio
+async def test_panel_password_is_not_rewritten_on_every_read():
+    """A healthy password must not trigger a re-encrypt (and a DB write)."""
+    async with AsyncSessionLocal() as session:
+        ps = await get_panel_settings(session)
+        set_panel_password(ps, "s3cret-panel-password")
+        await session.commit()
+
+        stored = ps.panel_password
+        assert repair_panel_password(ps) is False
+        assert ps.panel_password == stored, "password was rewritten needlessly"
+
+        # reading the settings again must not change the stored value
+        ps2 = await get_panel_settings(session)
+        assert ps2.panel_password == stored
+
+
+def test_double_encrypted_password_is_repaired():
+    from app.database.models import PanelSettings
+
+    ps = PanelSettings(id=1)
+    double = encrypt(encrypt("s3cret"))
+    ps.panel_password = double
+    assert repair_panel_password(ps) is True
+    assert ps.panel_password != double
+    assert ps.panel_password.startswith("gAAAA")
+
+
+def test_plaintext_password_is_left_to_the_migration():
+    from app.database.models import PanelSettings
+
+    ps = PanelSettings(id=1)
+    ps.panel_password = "plain-text"
+    assert repair_panel_password(ps) is False
+    assert ps.panel_password == "plain-text"
 
 
 @pytest.mark.asyncio
