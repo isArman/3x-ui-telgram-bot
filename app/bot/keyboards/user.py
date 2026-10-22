@@ -13,6 +13,7 @@ from app.bot.constants import (
     BTN_TOP_UP,
     BTN_WALLET,
     CANCEL_BUTTON,
+    callback_data_fits,
 )
 
 
@@ -94,10 +95,13 @@ def plans_keyboard(plans: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
 
     for plan in plans:
+        data = f"plan:{plan['id']}"
+        if not callback_data_fits(data):
+            continue
         builder.row(
             InlineKeyboardButton(
                 text=f"{plan['name']} - {plan['price']:,} تومان",
-                callback_data=f"plan:{plan['id']}",
+                callback_data=data,
             )
         )
 
@@ -121,14 +125,29 @@ def confirm_order_keyboard(back_callback: str = "back:plans") -> InlineKeyboardM
     return builder.as_markup()
 
 
-def accounts_list_keyboard(accounts) -> InlineKeyboardMarkup:
-    """Renew buttons for each VPN account."""
+def accounts_list_keyboard(
+    client_email: str | None = None,
+    account_ids: List[int] | None = None,
+) -> InlineKeyboardMarkup:
+    """Renew buttons for the accounts shown in the list."""
     builder = InlineKeyboardBuilder()
-    for account in accounts:
+    if client_email:
+        data = f"renew_client:{client_email}"
+        if callback_data_fits(data):
+            builder.row(
+                InlineKeyboardButton(
+                    text="تمدید اکانت",
+                    callback_data=data,
+                )
+            )
+    for account_id in account_ids or []:
+        data = f"renew_account:{account_id}"
+        if not callback_data_fits(data):
+            continue
         builder.row(
             InlineKeyboardButton(
-                text=f"تمدید سفارش #{account.order_id}",
-                callback_data=f"renew_account:{account.id}",
+                text=f"تمدید اکانت #{account_id}",
+                callback_data=data,
             )
         )
     builder.row(
@@ -152,10 +171,14 @@ def usage_alert_keyboard(vpn_account_id: int) -> InlineKeyboardMarkup:
 def renew_plans_keyboard(plans: List[Dict[str, Any]], vpn_account_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for plan in plans:
+        data = f"renew_plan:{vpn_account_id}:{plan['id']}"
+        if not callback_data_fits(data):
+            # Telegram rejects the whole keyboard when one payload is too long.
+            continue
         builder.row(
             InlineKeyboardButton(
                 text=f"{plan['name']} - {plan['price']:,} تومان",
-                callback_data=f"renew_plan:{vpn_account_id}:{plan['id']}",
+                callback_data=data,
             )
         )
     builder.row(

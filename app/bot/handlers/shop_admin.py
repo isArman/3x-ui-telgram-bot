@@ -28,6 +28,7 @@ from app.services.bot_settings import (
     set_card_number,
 )
 from app.services.plans_catalog import (
+    MAX_PLAN_ID_LENGTH,
     create_plan,
     get_plan_row,
     get_pricing_settings,
@@ -307,17 +308,17 @@ async def admin_plan_edit_save(message: Message, state: FSMContext):
                     raise ValueError("نام خالی است")
                 await update_plan_fields(session, plan, name=raw)
             elif field == "days":
-                days = int(raw)
+                days = int((raw or "").strip())
                 if not 1 <= days <= 3650:
                     raise ValueError("روز نامعتبر")
                 await update_plan_fields(session, plan, days=days)
             elif field == "traffic":
-                traffic = int(raw)
+                traffic = int((raw or "").strip())
                 if not 1 <= traffic <= 10000:
                     raise ValueError("حجم نامعتبر")
                 await update_plan_fields(session, plan, traffic_gb=traffic)
             elif field == "price":
-                price = int(raw.replace(",", "").replace("،", ""))
+                price = int((raw or "").replace(",", "").replace("،", ""))
                 if price < 0:
                     raise ValueError("قیمت نامعتبر")
                 await update_plan_fields(session, plan, price=price)
@@ -375,6 +376,11 @@ async def admin_plan_add_id(message: Message, state: FSMContext):
     if not plan_id or not plan_id.replace("_", "").replace("-", "").isalnum():
         await message.answer("شناسه فقط حروف، عدد، - و _ باشد.")
         return
+    if len(plan_id) > MAX_PLAN_ID_LENGTH:
+        await message.answer(
+            f"شناسه حداکثر {MAX_PLAN_ID_LENGTH} کاراکتر باشد."
+        )
+        return
     async with AsyncSessionLocal() as session:
         if await get_plan_row(session, plan_id):
             await message.answer("این شناسه قبلاً وجود دارد.")
@@ -408,7 +414,7 @@ async def admin_plan_add_days(message: Message, state: FSMContext):
         await _cancel_shop_edit(message, state)
         return
     try:
-        days = int(message.text.strip())
+        days = int((message.text or "").strip())
         if not 1 <= days <= 3650:
             raise ValueError
     except (TypeError, ValueError):
@@ -427,7 +433,7 @@ async def admin_plan_add_traffic(message: Message, state: FSMContext):
         await _cancel_shop_edit(message, state)
         return
     try:
-        traffic = int(message.text.strip())
+        traffic = int((message.text or "").strip())
         if not 1 <= traffic <= 10000:
             raise ValueError
     except (TypeError, ValueError):
@@ -446,7 +452,7 @@ async def admin_plan_add_price(message: Message, state: FSMContext):
         await _cancel_shop_edit(message, state)
         return
     try:
-        price = int(message.text.replace(",", "").replace("،", "").strip())
+        price = int((message.text or "").replace(",", "").replace("،", "").strip())
         if price < 0:
             raise ValueError
     except (TypeError, ValueError):
@@ -467,16 +473,20 @@ async def admin_plan_add_description(message: Message, state: FSMContext):
     raw = (message.text or "").strip()
     description = "" if raw in ("-", "—") else raw
     data = await state.get_data()
-    async with AsyncSessionLocal() as session:
-        plan = await create_plan(
-            session,
-            plan_id=data["new_plan_id"],
-            name=data["new_plan_name"],
-            days=data["new_plan_days"],
-            traffic_gb=data["new_plan_traffic"],
-            price=data["new_plan_price"],
-            description=description,
-        )
+    try:
+        async with AsyncSessionLocal() as session:
+            plan = await create_plan(
+                session,
+                plan_id=data["new_plan_id"],
+                name=data["new_plan_name"],
+                days=data["new_plan_days"],
+                traffic_gb=data["new_plan_traffic"],
+                price=data["new_plan_price"],
+                description=description,
+            )
+    except ValueError as exc:
+        await message.answer(str(exc))
+        return
     await state.clear()
     await message.answer(
         f"پلن «{plan.name}» اضافه شد.\n{plan.price:,} تومان",
@@ -542,7 +552,7 @@ async def admin_pricing_day_save(message: Message, state: FSMContext):
         await _cancel_shop_edit(message, state)
         return
     try:
-        value = int(message.text.replace(",", "").replace("،", "").strip())
+        value = int((message.text or "").replace(",", "").replace("،", "").strip())
         if value < 0:
             raise ValueError
     except (TypeError, ValueError):
@@ -571,7 +581,7 @@ async def admin_pricing_gb_save(message: Message, state: FSMContext):
         await _cancel_shop_edit(message, state)
         return
     try:
-        value = int(message.text.replace(",", "").replace("،", "").strip())
+        value = int((message.text or "").replace(",", "").replace("،", "").strip())
         if value < 0:
             raise ValueError
     except (TypeError, ValueError):

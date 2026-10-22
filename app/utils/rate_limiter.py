@@ -4,10 +4,23 @@ from typing import Dict, Optional
 
 class RateLimiter:
     """Simple in-memory rate limiter for user actions"""
-    
+
+    # Entries older than this are dropped so the map cannot grow forever.
+    MAX_ENTRY_AGE_SECONDS = 3600
+
     def __init__(self):
         self._user_actions: Dict[int, Dict[str, datetime]] = {}
-    
+
+    def _prune(self, now: datetime) -> None:
+        """Drop stale entries so long-running bots do not leak memory."""
+        cutoff = now - timedelta(seconds=self.MAX_ENTRY_AGE_SECONDS)
+        for user_id, actions in list(self._user_actions.items()):
+            for action, stamp in list(actions.items()):
+                if stamp < cutoff:
+                    actions.pop(action, None)
+            if not actions:
+                self._user_actions.pop(user_id, None)
+
     def check_limit(
         self, 
         user_id: int, 
@@ -21,6 +34,7 @@ class RateLimiter:
             (can_proceed, seconds_remaining)
         """
         now = datetime.utcnow()
+        self._prune(now)
         
         if user_id not in self._user_actions:
             self._user_actions[user_id] = {}

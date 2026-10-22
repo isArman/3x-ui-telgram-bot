@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 from typing import Optional
 
 from sqlalchemy import select
@@ -19,6 +20,22 @@ from app.xui.client import XUIClient, XUIError, build_subscription_url
 
 def _gb_to_bytes(gb: int) -> int:
     return gb * 1024 * 1024 * 1024
+
+
+@dataclass
+class ProvisionResult:
+    """
+    Authoritative panel state after provisioning.
+
+    The panel owns the real quota/expiry, so the database must mirror these
+    values instead of recomputing them — a repeat purchase extends the client
+    on the panel, and the local row has to follow.
+    """
+
+    subscription_url: str
+    client_email: str
+    total_bytes: int = 0
+    expiry_ms: int = 0
 
 
 def _bulk_adjust_skipped(result: dict, email: str) -> bool:
@@ -98,15 +115,15 @@ async def sync_active_clients_inbounds(
     return ok, fail
 
 
-async def provision_subscription_for_order(
+async def provision_subscription_detailed(
     session: AsyncSession,
     settings: PanelSettings,
     user: User,
     order: Order,
     existing_account: VPNAccount | None = None,
-) -> Optional[str]:
+) -> Optional[ProvisionResult]:
     """
-    Create or extend a 3x-ui client and return the subscription URL.
+    Create or extend a 3x-ui client and return the resulting panel state.
 
     New client: created with the order's quota/expiry.
     Existing client (renewal or repeat purchase): extended with an atomic
@@ -181,4 +198,23 @@ async def provision_subscription_for_order(
         logger.error("3x-ui client has no subId for order %s", order.id)
         return None
 
-    return build_subscription_url(settings.subscription_base_url, sub_id)
+    return ProvisionResult(
+        subscription_url=build_subscription_url(settings.subscription_base_url, sub_id),
+        client_email=email,
+        total_bytes=int(client_data.get("totalGB") or 0),
+        expiry_ms=int(client_data.get("expiryTime") or 0),
+    )
+
+
+async def provision_subscription_for_order(
+    session: AsyncSession,
+    settings: PanelSettings,
+    user: User,
+    order: Order,
+    existing_account: VPNAccount | None = None,
+) -> Optional[str]:
+    """Backwards-compatible wrapper returning only the subscription URL."""
+    result = await provision_subscription_detailed(
+        session, settings, user, order, existing_account=existing_account
+    )
+    return result.subscription_url if result else None

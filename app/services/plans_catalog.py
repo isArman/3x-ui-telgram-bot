@@ -9,6 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import PricingSettings, ShopPlan
 
+# Telegram caps callback_data at 64 bytes and rejects the whole keyboard when
+# one payload is too long. Plan ids end up in callback payloads
+# ("admin:plans:edit:<id>:description"), so they have to stay short.
+MAX_PLAN_ID_LENGTH = 24
+
 
 def plan_to_dict(plan: ShopPlan) -> dict[str, Any]:
     return {
@@ -103,6 +108,11 @@ async def create_plan(
     description: str = "",
     sort_order: int | None = None,
 ) -> ShopPlan:
+    plan_id = plan_id.strip()
+    if len(plan_id) > MAX_PLAN_ID_LENGTH:
+        raise ValueError(
+            f"plan id must be at most {MAX_PLAN_ID_LENGTH} characters"
+        )
     if sort_order is None:
         sort_order = await count_plans(session)
     plan = ShopPlan(

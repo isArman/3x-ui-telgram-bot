@@ -9,7 +9,7 @@ from app.bot.constants import (
     BTN_MY_ORDERS,
     BTN_REFERRAL,
     BTN_WALLET,
-    MAIN_MENU_BUTTONS,
+    canonicalize_menu_text,
 )
 
 
@@ -18,8 +18,8 @@ async def dispatch_main_menu(message: Message, state: FSMContext) -> bool:
     Clear FSM and run the matching main-menu action.
     Returns True if the message was a menu button.
     """
-    text = message.text
-    if text not in MAIN_MENU_BUTTONS:
+    text = canonicalize_menu_text(message.text)
+    if text is None:
         return False
 
     from app.bot.handlers.user import abandon_current_order_if_any

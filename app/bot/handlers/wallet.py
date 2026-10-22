@@ -12,6 +12,7 @@ from app.bot.constants import (
     CANCEL_BUTTON,
     FLOW_NAV_BUTTONS,
     MAIN_MENU_BUTTONS,
+    button_texts,
 )
 from app.bot.keyboards.admin import topup_review_keyboard
 from app.bot.keyboards.user import (
@@ -58,7 +59,7 @@ async def topup_menu_interrupt(message: Message, state: FSMContext):
     await dispatch_main_menu(message, state)
 
 
-@router.message(F.text == BTN_WALLET)
+@router.message(F.text.in_(button_texts(BTN_WALLET)))
 async def show_wallet(message: Message, state: FSMContext):
     """Show wallet balance and top-up option."""
     from app.bot.handlers.user import abandon_current_order_if_any
@@ -87,8 +88,11 @@ async def wallet_home_back(message: Message, state: FSMContext):
     )
 
 
-@router.message(F.text == BTN_TOP_UP)
+@router.message(F.text.in_(button_texts(BTN_TOP_UP)))
 async def topup_start(message: Message, state: FSMContext):
+    # A pending top-up from an earlier step would otherwise be orphaned: the
+    # FSM data is cleared here, so it could never be cancelled again.
+    await _cancel_pending_topup(state, message.from_user.id)
     await state.clear()
     await state.set_state(TopUpStates.waiting_for_amount)
     await message.answer(
@@ -114,7 +118,7 @@ async def topup_amount_cancel(message: Message, state: FSMContext):
 @router.message(TopUpStates.waiting_for_amount)
 async def topup_amount(message: Message, state: FSMContext):
     try:
-        amount = int(message.text.replace(",", "").replace("،", "").strip())
+        amount = int((message.text or "").replace(",", "").replace("،", "").strip())
         if amount < 1:
             await message.answer(get_text("error_invalid_number"))
             return
@@ -353,7 +357,7 @@ async def topup_receive_receipt(message: Message, state: FSMContext):
     await state.clear()
 
 
-_MENU_BUTTONS = MAIN_MENU_BUTTONS | FLOW_NAV_BUTTONS | {BTN_TOP_UP}
+_MENU_BUTTONS = MAIN_MENU_BUTTONS | FLOW_NAV_BUTTONS | button_texts(BTN_TOP_UP)
 
 
 @router.message(TopUpStates.waiting_for_receipt, ~F.text.in_(_MENU_BUTTONS))

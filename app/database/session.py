@@ -164,6 +164,30 @@ async def _migrate_sqlite_indexes(conn):
         await conn.execute(text(stmt))
 
 
+async def _migrate_sqlite_dedupe_auto_accounts(conn):
+    """One panel client per user -> one active account row per user.
+
+    Older releases inserted a new vpn_accounts row for every order, even when
+    the 3x-ui panel merely extended the same client. The leftovers are parked
+    (is_active = 0) so they stop firing duplicate expiry/traffic alerts.
+    """
+    await conn.execute(
+        text(
+            """
+            UPDATE vpn_accounts
+            SET is_active = 0
+            WHERE config_ref = 'xui-auto'
+              AND is_active = 1
+              AND id NOT IN (
+                  SELECT MAX(id) FROM vpn_accounts
+                  WHERE config_ref = 'xui-auto'
+                  GROUP BY user_id
+              )
+            """
+        )
+    )
+
+
 async def init_db():
     """Initialize database tables and seed shop settings if empty."""
     async with engine.begin() as conn:
@@ -171,6 +195,7 @@ async def init_db():
         if settings.DATABASE_URL.startswith("sqlite"):
             await _migrate_sqlite_columns(conn)
             await _migrate_sqlite_indexes(conn)
+            await _migrate_sqlite_dedupe_auto_accounts(conn)
             await _backfill_referral_codes(conn)
 
     # Seed card + plans outside the DDL transaction

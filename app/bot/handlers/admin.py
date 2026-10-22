@@ -13,6 +13,7 @@ from app.bot.constants import (
     CANCEL_BUTTON,
     CONFIGS_MENU_TEXT,
     MAIN_MENU_BUTTONS,
+    button_texts,
 )
 from app.bot.menu_dispatch import dispatch_main_menu
 from sqlalchemy import func, select
@@ -176,7 +177,7 @@ async def admin_subscription_menu_interrupt(message: Message):
 
 
 @router.message(Command("admin"))
-@router.message(F.text == BTN_ADMIN_PANEL)
+@router.message(F.text.in_(button_texts(BTN_ADMIN_PANEL)))
 async def admin_menu(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         await message.answer("شما دسترسی ادمین ندارید.")
@@ -356,7 +357,11 @@ async def approve_payment(callback: CallbackQuery, state: FSMContext):
         await callback.answer("شما دسترسی ندارید.", show_alert=True)
         return
 
-    payment_id = int(callback.data.split(":")[1])
+    try:
+        payment_id = int(callback.data.split(":")[1])
+    except (IndexError, ValueError):
+        await callback.answer("پرداخت پیدا نشد.", show_alert=True)
+        return
 
     async with AsyncSessionLocal() as session:
         result = await session.execute(select(Payment).where(Payment.id == payment_id))
@@ -381,7 +386,15 @@ async def approve_payment(callback: CallbackQuery, state: FSMContext):
                 session, payment, order, callback.from_user.id, plan_name
             )
         except ValueError as exc:
+            await session.rollback()
             await callback.answer(str(exc), show_alert=True)
+            return
+        except Exception as exc:
+            # Never leave the admin with a spinner: the payment stays pending
+            # and can be reviewed again.
+            logger.error("Failed to fulfill order %s: %s", order.id, exc, exc_info=True)
+            await session.rollback()
+            await callback.answer("خطا در فعال‌سازی سفارش.", show_alert=True)
             return
 
         if fulfill.referral_cashback:
@@ -530,7 +543,11 @@ async def reject_payment(callback: CallbackQuery):
         await callback.answer("شما دسترسی ندارید.", show_alert=True)
         return
 
-    payment_id = int(callback.data.split(":")[1])
+    try:
+        payment_id = int(callback.data.split(":")[1])
+    except (IndexError, ValueError):
+        await callback.answer("پرداخت پیدا نشد.", show_alert=True)
+        return
 
     async with AsyncSessionLocal() as session:
         result = await session.execute(select(Payment).where(Payment.id == payment_id))
@@ -627,7 +644,11 @@ async def approve_topup(callback: CallbackQuery):
         await callback.answer("شما دسترسی ندارید.", show_alert=True)
         return
 
-    topup_id = int(callback.data.split(":")[1])
+    try:
+        topup_id = int(callback.data.split(":")[1])
+    except (IndexError, ValueError):
+        await callback.answer("درخواست پیدا نشد.", show_alert=True)
+        return
 
     async with AsyncSessionLocal() as session:
         result = await session.execute(
@@ -679,7 +700,11 @@ async def manual_topup_start(callback: CallbackQuery, state: FSMContext):
         await callback.answer("شما دسترسی ندارید.", show_alert=True)
         return
 
-    topup_id = int(callback.data.split(":")[1])
+    try:
+        topup_id = int(callback.data.split(":")[1])
+    except (IndexError, ValueError):
+        await callback.answer("درخواست پیدا نشد.", show_alert=True)
+        return
 
     async with AsyncSessionLocal() as session:
         result = await session.execute(
@@ -721,7 +746,7 @@ async def manual_topup_amount(message: Message, state: FSMContext):
         return
 
     try:
-        amount = int(message.text.replace(",", "").replace("،", "").strip())
+        amount = int((message.text or "").replace(",", "").replace("،", "").strip())
         if amount < 1:
             await message.answer(get_text("error_invalid_number"))
             return
@@ -791,7 +816,11 @@ async def reject_topup(callback: CallbackQuery):
         await callback.answer("شما دسترسی ندارید.", show_alert=True)
         return
 
-    topup_id = int(callback.data.split(":")[1])
+    try:
+        topup_id = int(callback.data.split(":")[1])
+    except (IndexError, ValueError):
+        await callback.answer("درخواست پیدا نشد.", show_alert=True)
+        return
 
     async with AsyncSessionLocal() as session:
         result = await session.execute(

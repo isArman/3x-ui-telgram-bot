@@ -6,7 +6,11 @@ from aiogram.types import (
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
-from app.bot.constants import BACK_BUTTON, CANCEL_BUTTON
+from app.bot.constants import (
+    BACK_BUTTON,
+    CANCEL_BUTTON,
+    callback_data_fits,
+)
 
 
 def admin_cancel_keyboard() -> ReplyKeyboardMarkup:
@@ -96,10 +100,14 @@ def plan_admin_list_keyboard(plans) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for plan in plans:
         mark = "•" if plan.is_active else "(غیرفعال)"
+        data = f"admin:plans:view:{plan.id}"
+        if not callback_data_fits(data):
+            # Telegram would reject the whole keyboard; skip the entry instead.
+            continue
         builder.row(
             InlineKeyboardButton(
                 text=f"{mark} {plan.name} ({plan.price:,})",
-                callback_data=f"admin:plans:view:{plan.id}",
+                callback_data=data,
             )
         )
     builder.row(InlineKeyboardButton(text="بازگشت", callback_data="admin:plans"))
@@ -108,34 +116,31 @@ def plan_admin_list_keyboard(plans) -> InlineKeyboardMarkup:
 
 def plan_admin_detail_keyboard(plan_id: str, is_active: bool) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.row(
-        InlineKeyboardButton(
-            text="نام", callback_data=f"admin:plans:edit:{plan_id}:name"
-        ),
-        InlineKeyboardButton(
-            text="روز", callback_data=f"admin:plans:edit:{plan_id}:days"
-        ),
+    fields = (
+        ("نام", "name"),
+        ("روز", "days"),
+        ("حجم", "traffic"),
+        ("قیمت", "price"),
+        ("توضیحات", "description"),
     )
-    builder.row(
-        InlineKeyboardButton(
-            text="حجم", callback_data=f"admin:plans:edit:{plan_id}:traffic"
-        ),
-        InlineKeyboardButton(
-            text="قیمت", callback_data=f"admin:plans:edit:{plan_id}:price"
-        ),
-    )
-    builder.row(
-        InlineKeyboardButton(
-            text="توضیحات",
-            callback_data=f"admin:plans:edit:{plan_id}:description",
+    row = []
+    for label, field in fields:
+        data = f"admin:plans:edit:{plan_id}:{field}"
+        if not callback_data_fits(data):
+            continue
+        row.append(InlineKeyboardButton(text=label, callback_data=data))
+        if len(row) == 2:
+            builder.row(*row)
+            row = []
+    if row:
+        builder.row(*row)
+
+    toggle_data = f"admin:plans:toggle:{plan_id}"
+    if callback_data_fits(toggle_data):
+        toggle_label = "غیرفعال کردن" if is_active else "فعال کردن"
+        builder.row(
+            InlineKeyboardButton(text=toggle_label, callback_data=toggle_data)
         )
-    )
-    toggle_label = "غیرفعال کردن" if is_active else "فعال کردن"
-    builder.row(
-        InlineKeyboardButton(
-            text=toggle_label, callback_data=f"admin:plans:toggle:{plan_id}"
-        )
-    )
     builder.row(InlineKeyboardButton(text="بازگشت", callback_data="admin:plans:list"))
     return builder.as_markup()
 
@@ -230,10 +235,13 @@ def configs_menu_keyboard() -> InlineKeyboardMarkup:
 def plan_select_keyboard(plans, prefix: str) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for plan in plans:
+        data = f"{prefix}:{plan['id']}"
+        if not callback_data_fits(data):
+            continue
         builder.row(
             InlineKeyboardButton(
                 text=plan["name"],
-                callback_data=f"{prefix}:{plan['id']}",
+                callback_data=data,
             )
         )
     builder.row(InlineKeyboardButton(text="بازگشت", callback_data="configs:menu"))

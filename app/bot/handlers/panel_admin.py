@@ -222,8 +222,12 @@ async def panel_receive_password(message: Message, state: FSMContext):
         return
 
     data = await state.get_data()
-    panel_url = data["panel_url"]
-    panel_username = data["panel_username"]
+    panel_url = data.get("panel_url")
+    panel_username = data.get("panel_username")
+    if not panel_url or not panel_username:
+        await message.answer("تنظیم پنل را از نو شروع کنید.")
+        await state.clear()
+        return
     panel_password = message.text.strip()
 
     await _try_delete_message(message)

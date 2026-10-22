@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from aiogram import Router, F
 from aiogram.filters import CommandStart
 from aiogram.types import Message, CallbackQuery
@@ -21,6 +23,7 @@ from app.bot.constants import (
     FLOW_NAV_BUTTONS,
     MAIN_MENU_BUTTONS,
     ORDER_STATUS_LABELS,
+    button_texts,
 )
 from app.bot.states import CustomPlanStates, PaymentStates, WalletPayStates
 from app.bot.keyboards.user import (
@@ -40,6 +43,13 @@ from app.services.wallet import (
     get_balance,
 )
 from app.services.order_fulfillment import fulfill_paid_order
+from app.services.panel_settings import (
+    get_panel_password,
+    get_panel_settings,
+    xui_client_for_panel,
+)
+from app.services.traffic_usage import format_gb
+from app.xui.client import build_subscription_url
 from app.services.referral import (
     apply_purchase_discount,
     ensure_referral_code,
@@ -178,6 +188,11 @@ async def get_or_create_user_from_message(
 
 async def prompt_wallet_payment(bot, user_id: int, order: Order, state: FSMContext) -> None:
     """Ask the user whether to pay with wallet after order creation."""
+    if int(order.price or 0) <= 0:
+        # Nothing to pay — deliver the order right away instead of asking.
+        await deliver_free_order(bot, user_id, order, state)
+        return
+
     async with AsyncSessionLocal() as session:
         balance = await get_balance(session, user_id)
 
@@ -193,6 +208,49 @@ async def prompt_wallet_payment(bot, user_id: int, order: Order, state: FSMConte
     )
     await state.update_data(order_id=order.id)
     await state.set_state(WalletPayStates.choosing)
+
+
+async def deliver_free_order(
+    bot, user_id: int, order: Order, state: FSMContext
+) -> None:
+    """Deliver a zero-priced order immediately (no payment is involved)."""
+    from app.utils.logger import logger
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(Order).where(Order.id == order.id))
+        fresh = result.scalar_one_or_none()
+        if not fresh or fresh.user_id != user_id:
+            await state.clear()
+            return
+
+        fresh.status = "paid"
+        payment = Payment(
+            order_id=fresh.id,
+            user_id=user_id,
+            receipt_file_id="free",
+            status="pending",
+        )
+        session.add(payment)
+        await session.commit()
+        await session.refresh(payment)
+        await session.refresh(fresh)
+
+        try:
+            await fulfill_full_wallet_order(
+                bot,
+                session,
+                payment,
+                fresh,
+                paid_note=(
+                    "سفارش شما ثبت شد.\n"
+                    "اکانت شما به‌زودی توسط ادمین ارسال می‌شود."
+                ),
+            )
+        except Exception as exc:
+            logger.error("Failed to deliver free order %s: %s", fresh.id, exc)
+            await notify_admins_wallet_manual(bot, payment, fresh)
+
+    await state.clear()
 
 
 async def send_card_payment_instructions(
@@ -282,7 +340,14 @@ async def notify_admins_wallet_manual(bot, payment: Payment, order: Order) -> No
             )
 
 
-async def fulfill_full_wallet_order(bot, session, payment: Payment, order: Order) -> None:
+async def fulfill_full_wallet_order(
+    bot,
+    session,
+    payment: Payment,
+    order: Order,
+    *,
+    paid_note: str | None = None,
+) -> None:
     """Fulfill an order fully paid from wallet (no receipt)."""
     from app.bot.handlers.admin import send_config_to_user, send_renewal_to_user
     from app.utils.logger import logger
@@ -311,7 +376,8 @@ async def fulfill_full_wallet_order(bot, session, payment: Payment, order: Order
     await notify_admins_wallet_manual(bot, payment, order)
     await bot.send_message(
         chat_id=order.user_id,
-        text=(
+        text=paid_note
+        or (
             "پرداخت از کیف پول ثبت شد.\n"
             "اکانت شما به‌زودی توسط ادمین ارسال می‌شود."
         ),
@@ -393,7 +459,7 @@ async def cmd_start(message: Message, state: FSMContext):
     )
 
 
-@router.message(F.text == BTN_REFERRAL)
+@router.message(F.text.in_(button_texts(BTN_REFERRAL)))
 async def show_referral(message: Message, state: FSMContext):
     """Show user's referral code and invite link."""
     await abandon_current_order_if_any(state, message.from_user.id)
@@ -429,7 +495,7 @@ async def show_referral(message: Message, state: FSMContext):
     )
 
 
-@router.message(F.text == BTN_BUY_PLAN)
+@router.message(F.text.in_(button_texts(BTN_BUY_PLAN)))
 async def show_plans(message: Message, state: FSMContext):
     """Show available plans"""
     await abandon_current_order_if_any(state, message.from_user.id)
@@ -482,7 +548,7 @@ async def select_plan(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(F.text == BTN_CUSTOM_PLAN)
+@router.message(F.text.in_(button_texts(BTN_CUSTOM_PLAN)))
 async def custom_plan_start(message: Message, state: FSMContext):
     """Start custom plan flow"""
     # Clear any leftover plan_id from a previously selected ready-made plan
@@ -509,7 +575,7 @@ async def custom_plan_days_cancel(message: Message, state: FSMContext):
 async def custom_plan_days(message: Message, state: FSMContext):
     """Handle custom plan days input"""
     try:
-        days = int(message.text)
+        days = int((message.text or "").strip())
         if not 1 <= days <= 365:
             await message.answer(get_text("error_out_of_range"))
             return
@@ -520,7 +586,7 @@ async def custom_plan_days(message: Message, state: FSMContext):
             get_text("custom_plan_traffic"),
             reply_markup=flow_nav_keyboard(),
         )
-    except ValueError:
+    except (TypeError, ValueError):
         await message.answer(get_text("error_invalid_number"))
 
 
@@ -542,13 +608,17 @@ async def custom_plan_traffic_cancel(message: Message, state: FSMContext):
 async def custom_plan_traffic(message: Message, state: FSMContext):
     """Handle custom plan traffic input"""
     try:
-        traffic = int(message.text)
+        traffic = int((message.text or "").strip())
         if not 1 <= traffic <= 500:
             await message.answer(get_text("error_out_of_range"))
             return
 
         data = await state.get_data()
-        days = data["days"]
+        days = data.get("days")
+        if not days:
+            await message.answer(get_text("error_general"))
+            await state.set_state(CustomPlanStates.waiting_for_days)
+            return
         async with AsyncSessionLocal() as session:
             pricing = await get_pricing(session)
             price = calculate_custom_price(days, traffic, pricing)
@@ -568,7 +638,7 @@ async def custom_plan_traffic(message: Message, state: FSMContext):
             reply_markup=confirm_order_keyboard("back:custom_traffic"),
         )
         await state.set_state(CustomPlanStates.waiting_for_confirm)
-    except ValueError:
+    except (TypeError, ValueError):
         await message.answer(get_text("error_invalid_number"))
 
 
@@ -728,6 +798,19 @@ async def wallet_pay_yes(callback: CallbackQuery, state: FSMContext):
             return
 
         balance = await get_balance(session, callback.from_user.id)
+        order_price = int(order.price or 0)
+
+        if order_price <= 0:
+            # Free order — there is no money to move.
+            try:
+                await callback.message.delete()
+            except Exception:
+                pass
+            await deliver_free_order(
+                callback.bot, callback.from_user.id, order, state
+            )
+            await callback.answer()
+            return
 
         if balance <= 0:
             try:
@@ -744,7 +827,7 @@ async def wallet_pay_yes(callback: CallbackQuery, state: FSMContext):
             await callback.answer()
             return
 
-        debit_amount = min(balance, order.price)
+        debit_amount = min(balance, order_price)
         try:
             new_balance = await debit_balance(
                 session, callback.from_user.id, debit_amount
@@ -754,6 +837,12 @@ async def wallet_pay_yes(callback: CallbackQuery, state: FSMContext):
                 "موجودی کیف پول کافی نیست.",
                 show_alert=True,
             )
+            return
+        except ValueError as exc:
+            from app.utils.logger import logger
+
+            logger.error("Wallet debit failed for order %s: %s", order.id, exc)
+            await callback.answer("خطا در برداشت از کیف پول.", show_alert=True)
             return
 
         order.wallet_debit = debit_amount
@@ -1051,7 +1140,7 @@ async def receive_receipt_invalid(message: Message):
     )
 
 
-@router.message(F.text == BTN_MY_ORDERS)
+@router.message(F.text.in_(button_texts(BTN_MY_ORDERS)))
 async def my_orders(message: Message, state: FSMContext):
     """Show user orders"""
     await abandon_current_order_if_any(state, message.from_user.id)
@@ -1099,62 +1188,164 @@ async def my_orders(message: Message, state: FSMContext):
         )
 
 
+def format_panel_account_text(
+    detail: dict,
+    subscription_base_url: str | None,
+    *,
+    now: datetime | None = None,
+) -> str:
+    client = detail.get("client") or {}
+    traffic = detail.get("traffic") or {}
+    now = now or datetime.now(timezone.utc)
+    total_bytes = int(client.get("totalGB") or 0)
+    used_bytes = int(traffic.get("up") or 0) + int(traffic.get("down") or 0)
+    expiry_ms = int(client.get("expiryTime") or 0)
+    expires_at = (
+        datetime.fromtimestamp(expiry_ms / 1000, timezone.utc) if expiry_ms > 0 else None
+    )
+
+    if expires_at and expires_at <= now:
+        status = "منقضی شده"
+    elif total_bytes > 0 and used_bytes >= total_bytes:
+        status = "حجم تمام شده"
+    elif not client.get("enable", True):
+        status = "غیرفعال"
+    else:
+        status = "فعال"
+
+    if total_bytes > 0:
+        remaining_bytes = max(total_bytes - used_bytes, 0)
+        traffic_text = (
+            f"حجم کل: {format_gb(total_bytes)} گیگابایت\n"
+            f"مصرف‌شده: {format_gb(used_bytes)} گیگابایت\n"
+            f"باقی‌مانده: {format_gb(remaining_bytes)} گیگابایت"
+        )
+    else:
+        traffic_text = f"حجم: نامحدود\nمصرف‌شده: {format_gb(used_bytes)} گیگابایت"
+
+    if expires_at:
+        expires_text = expires_at.strftime("%Y-%m-%d")
+        days_left = max((expires_at - now).days, 0)
+        expiry_details = f"انقضا: {expires_text}\nروزهای باقی‌مانده: {days_left}"
+    else:
+        expiry_details = "انقضا: نامحدود"
+
+    sub_id = client.get("subId")
+    subscription_url = (
+        build_subscription_url(subscription_base_url, str(sub_id))
+        if subscription_base_url and sub_id
+        else "در دسترس نیست"
+    )
+
+    return (
+        "اطلاعات اکانت شما از پنل 3x-ui:\n\n"
+        f"شناسه: {client.get('email') or '—'}\n"
+        f"{traffic_text}\n"
+        f"{expiry_details}\n"
+        f"وضعیت: {status}\n"
+        f"محدودیت IP همزمان: {client.get('limitIp') or 0}\n"
+        f"لینک اشتراک:\n{subscription_url}\n\n"
+        "برای تمدید، دکمه زیر را بزنید."
+    )
+
+
+async def _load_db_accounts(session: AsyncSession, user_id: int) -> list[VPNAccount]:
+    result = await session.execute(
+        select(VPNAccount)
+        .where(VPNAccount.user_id == user_id)
+        .order_by(VPNAccount.created_at.desc())
+        .limit(20)
+    )
+    return list(result.scalars().all())
+
+
+def format_db_accounts_text(
+    accounts: list[VPNAccount],
+    now: datetime | None = None,
+) -> str:
+    """Stored accounts (manual/inventory deliveries) — the panel does not own these."""
+    now = now or datetime.utcnow()
+    parts = ["اکانت‌های شما:", ""]
+    for account in accounts:
+        is_expired = account.expires_at < now
+        days_left = max((account.expires_at - now).days, 0)
+        if is_expired:
+            status = "منقضی شده"
+        elif account.is_active:
+            status = "فعال"
+        else:
+            status = "غیرفعال"
+        parts.append(
+            f"شماره سفارش: #{account.order_id}\n"
+            f"حجم: {account.traffic_limit_gb} گیگابایت\n"
+            f"روزهای باقی‌مانده: {days_left} روز\n"
+            f"تاریخ انقضا: {account.expires_at.strftime('%Y-%m-%d')}\n"
+            f"وضعیت: {status}\n"
+            f"لینک اشتراک:\n{account.subscription_path}\n"
+            f"{'─' * 30}"
+        )
+    parts.append("برای تمدید، دکمه زیر را بزنید.")
+    return "\n".join(parts)
+
+
 async def send_accounts_list(event: Message | CallbackQuery) -> None:
     from app.utils.logger import logger
-    from datetime import datetime
 
     user_id = event.from_user.id
     bot = event.bot
     chat_id = event.chat.id if isinstance(event, Message) else event.message.chat.id
 
     async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(VPNAccount)
-            .where(VPNAccount.user_id == user_id)
-            .order_by(VPNAccount.created_at.desc())
-            .limit(20)
+        panel = await get_panel_settings(session)
+        panel_ready = bool(
+            panel.panel_url and panel.panel_username and get_panel_password(panel)
         )
-        accounts = result.scalars().all()
+        subscription_base_url = panel.subscription_base_url
+        detail = None
+        if panel_ready:
+            try:
+                async with xui_client_for_panel(panel) as client:
+                    detail = await client.get_client(str(user_id))
+            except Exception as exc:
+                # A panel outage must not hide the accounts we already delivered.
+                logger.warning("Panel lookup failed for user %s: %s", user_id, exc)
+                detail = None
 
-        if not accounts:
+        if detail and detail.get("client"):
             await bot.send_message(
                 chat_id=chat_id,
-                text=(
-                    "هنوز اکانتی ندارید.\n\n"
-                    "برای خرید، از منو «خرید پلن» استفاده کنید."
-                ),
-                reply_markup=user_main_menu(user_id),
+                text=format_panel_account_text(detail, subscription_base_url),
+                reply_markup=accounts_list_keyboard(client_email=str(user_id)),
             )
+            logger.info("User %s viewed panel account details", user_id)
             return
 
-        now = datetime.utcnow()
-        text = "اکانت‌های شما:\n\n"
+        # No panel (manual mode) or no panel client for this user: fall back to
+        # the stored accounts so the subscription link is always reachable.
+        accounts = await _load_db_accounts(session, user_id)
 
-        for account in accounts:
-            is_expired = account.expires_at < now
-            days_left = (account.expires_at - now).days if not is_expired else 0
-            status = "فعال" if not is_expired and account.is_active else "منقضی شده"
-
-            text += (
-                f"شماره سفارش: #{account.order_id}\n"
-                f"حجم: {account.traffic_limit_gb} گیگابایت\n"
-                f"روزهای باقی‌مانده: {days_left} روز\n"
-                f"تاریخ انقضا: {account.expires_at.strftime('%Y-%m-%d')}\n"
-                f"وضعیت: {status}\n"
-                f"لینک اشتراک:\n{account.subscription_path}\n"
-                f"{'─' * 30}\n\n"
-            )
-
-        text += "برای تمدید، دکمه «تمدید» زیر را بزنید."
+    if accounts:
         await bot.send_message(
             chat_id=chat_id,
-            text=text,
-            reply_markup=accounts_list_keyboard(accounts),
+            text=format_db_accounts_text(accounts),
+            reply_markup=accounts_list_keyboard(
+                account_ids=[account.id for account in accounts]
+            ),
         )
-        logger.info("User %s viewed their accounts", user_id)
+        logger.info("User %s viewed %s stored account(s)", user_id, len(accounts))
+        return
+
+    await bot.send_message(
+        chat_id=chat_id,
+        text=(
+            "هنوز اکانتی ندارید.\n\n"
+            "برای خرید، از منو «خرید پلن» استفاده کنید."
+        ),
+        reply_markup=user_main_menu(user_id),
+    )
 
 
-@router.message(F.text == BTN_MY_ACCOUNTS)
+@router.message(F.text.in_(button_texts(BTN_MY_ACCOUNTS)))
 async def my_accounts(message: Message, state: FSMContext):
     """Show user's VPN accounts"""
     await abandon_current_order_if_any(state, message.from_user.id)
@@ -1185,9 +1376,30 @@ async def back_to_accounts(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+async def show_renew_plans(
+    callback: CallbackQuery,
+    state: FSMContext,
+    account: VPNAccount,
+) -> None:
+    await state.clear()
+    await state.update_data(renew_vpn_account_id=account.id)
+    async with AsyncSessionLocal() as session:
+        plans = await list_active_plans(session)
+    await callback.message.edit_text(
+        f"تمدید اکانت سفارش #{account.order_id}\n\n"
+        "یک پلن برای تمدید انتخاب کنید:",
+        reply_markup=renew_plans_keyboard(plans, account.id),
+    )
+    await callback.answer()
+
+
 @router.callback_query(F.data.startswith("renew_account:"))
 async def renew_account_start(callback: CallbackQuery, state: FSMContext):
-    vpn_account_id = int(callback.data.split(":")[1])
+    try:
+        vpn_account_id = int(callback.data.split(":")[1])
+    except (IndexError, ValueError):
+        await callback.answer("اکانت پیدا نشد.", show_alert=True)
+        return
 
     async with AsyncSessionLocal() as session:
         result = await session.execute(
@@ -1201,24 +1413,54 @@ async def renew_account_start(callback: CallbackQuery, state: FSMContext):
     if not account:
         await callback.answer("اکانت پیدا نشد.", show_alert=True)
         return
+    await show_renew_plans(callback, state, account)
 
-    await state.clear()
-    await state.update_data(renew_vpn_account_id=vpn_account_id)
+
+@router.callback_query(F.data.startswith("renew_client:"))
+async def renew_panel_client_start(callback: CallbackQuery, state: FSMContext):
+    client_email = callback.data.split(":", 1)[1]
+    if client_email != str(callback.from_user.id):
+        await callback.answer("اکانت پیدا نشد.", show_alert=True)
+        return
+
     async with AsyncSessionLocal() as session:
-        plans = await list_active_plans(session)
-    await callback.message.edit_text(
-        f"تمدید اکانت سفارش #{account.order_id}\n\n"
-        "یک پلن برای تمدید انتخاب کنید:",
-        reply_markup=renew_plans_keyboard(plans, vpn_account_id),
-    )
-    await callback.answer()
+        # The panel keeps one client per user, so renew the account row that
+        # belongs to that client — not simply the newest row of the user.
+        result = await session.execute(
+            select(VPNAccount)
+            .where(
+                VPNAccount.user_id == callback.from_user.id,
+                VPNAccount.config_ref == "xui-auto",
+            )
+            .order_by(VPNAccount.created_at.desc())
+            .limit(1)
+        )
+        account = result.scalar_one_or_none()
+
+        if account is None:
+            result = await session.execute(
+                select(VPNAccount)
+                .where(VPNAccount.user_id == callback.from_user.id)
+                .order_by(VPNAccount.created_at.desc())
+                .limit(1)
+            )
+            account = result.scalar_one_or_none()
+
+    if not account:
+        await callback.answer("برای این اکانت سفارش تمدید پیدا نشد.", show_alert=True)
+        return
+    await show_renew_plans(callback, state, account)
 
 
 @router.callback_query(F.data.startswith("renew_plan:"))
 async def renew_select_plan(callback: CallbackQuery, state: FSMContext):
     parts = callback.data.split(":")
-    vpn_account_id = int(parts[1])
-    plan_id = parts[2]
+    try:
+        vpn_account_id = int(parts[1])
+        plan_id = parts[2]
+    except (IndexError, ValueError):
+        await callback.answer("پلن پیدا نشد.", show_alert=True)
+        return
     async with AsyncSessionLocal() as session:
         plan = await get_plan(session, plan_id, active_only=True)
 
@@ -1267,7 +1509,7 @@ async def confirm_renew_order(callback: CallbackQuery, state: FSMContext):
     from app.utils.rate_limiter import rate_limiter
 
     can_proceed, remaining = rate_limiter.check_limit(
-        callback.from_user.id, "create_order", seconds=60
+        callback.from_user.id, "create_renew_order", seconds=60
     )
     if not can_proceed:
         await callback.answer(
