@@ -69,6 +69,22 @@ class Settings:
     def LOG_LEVEL(self) -> str:
         return get_env("LOG_LEVEL", "INFO").upper()
 
+    @property
+    def MINIAPP_URL(self) -> str:
+        """Public HTTPS URL of the Mini App (must be reachable by Telegram)."""
+        return get_env("MINIAPP_URL", "").rstrip("/")
+
+    @property
+    def WEB_HOST(self) -> str:
+        return get_env("WEB_HOST", "0.0.0.0")
+
+    @property
+    def WEB_PORT(self) -> int:
+        try:
+            return int(get_env("WEB_PORT", "8080"))
+        except ValueError:
+            return 8080
+
     def validate(self):
         required = {
             "BOT_TOKEN": self.BOT_TOKEN,
@@ -77,6 +93,10 @@ class Settings:
         missing = [key for key, value in required.items() if not value]
         if missing:
             raise ValueError(f"Missing required settings: {', '.join(missing)}")
+        if not self.MINIAPP_URL:
+            raise ValueError("Missing required setting: MINIAPP_URL")
+        if not self.MINIAPP_URL.startswith("https://"):
+            raise ValueError("MINIAPP_URL must be an https:// URL")
 
 
 settings = Settings()

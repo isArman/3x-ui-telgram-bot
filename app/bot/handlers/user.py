@@ -2,7 +2,13 @@ from datetime import datetime, timezone
 
 from aiogram import Router, F
 from aiogram.filters import Command, CommandStart
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import (
+    KeyboardButton,
+    Message,
+    CallbackQuery,
+    ReplyKeyboardMarkup,
+    WebAppInfo,
+)
 from aiogram.fsm.context import FSMContext
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -481,7 +487,7 @@ async def abandon_current_order_if_any(state: FSMContext, user_id: int) -> int |
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
-    """Start command handler — supports /start <referral_code>."""
+    """Start command handler — opens the Mini App."""
     await abandon_current_order_if_any(state, message.from_user.id)
     await state.clear()
 
@@ -506,24 +512,25 @@ async def cmd_start(message: Message, state: FSMContext):
     elif eligible:
         text += get_text("referral_eligible_notice")
 
-    await message.answer(
-        text,
-        reply_markup=user_main_menu(message.from_user.id),
-    )
-
-    # Offer the free trial when the customer is still eligible for one.
-    async with AsyncSessionLocal() as session:
-        can_take, _ = await trial_available(session, message.from_user.id)
-        trial_settings = await get_trial_settings(session)
-    if can_take:
+    await message.answer(text, reply_markup=mini_app_keyboard())
+    if payload:
         await message.answer(
-            get_text(
-                "trial_available",
-                days=trial_settings.days,
-                traffic=trial_settings.gb,
-            ),
-            reply_markup=trial_keyboard(),
+            "برای استفاده از کد معرف، لینک دعوت را در Mini App باز کنید.",
+            reply_markup=mini_app_keyboard(),
         )
+
+
+def mini_app_keyboard() -> ReplyKeyboardMarkup:
+    """The reply keyboard that opens the Mini App."""
+    from aiogram.types import ReplyKeyboardRemove
+
+    url = settings.MINIAPP_URL
+    if not url:
+        return ReplyKeyboardRemove()
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="🛒 فروشگاه", web_app=WebAppInfo(url=url))]],
+        resize_keyboard=True,
+    )
 
 
 @router.message(F.text.in_(button_texts(BTN_REFERRAL)))

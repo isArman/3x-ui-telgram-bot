@@ -7,7 +7,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database.models import PricingSettings, ShopPlan
+from app.database.models import PlanConfig, PricingSettings, ShopPlan
 
 # Telegram caps callback_data at 64 bytes and rejects the whole keyboard when
 # one payload is too long. Plan ids end up in callback payloads
@@ -152,6 +152,17 @@ async def set_plan_active(
     await session.commit()
     await session.refresh(plan)
     return plan
+
+
+async def delete_plan(session: AsyncSession, plan: ShopPlan) -> None:
+    """Remove a plan. Only allowed when it has no linked configs."""
+    linked = await session.execute(
+        select(func.count(PlanConfig.id)).where(PlanConfig.plan_id == plan.id)
+    )
+    if int(linked.scalar_one() or 0) > 0:
+        raise ValueError("برای این پلن کانفیگ ثبت شده است؛ آن را حذف یا غیرفعال کنید.")
+    await session.delete(plan)
+    await session.commit()
 
 
 async def bootstrap_plans_from_yaml(session: AsyncSession) -> int:

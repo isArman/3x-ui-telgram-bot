@@ -10,6 +10,7 @@ from app.config.settings import settings
 from app.database.session import init_db
 from app.utils.logger import logger as app_logger
 from app.utils.scheduler import run_notification_scheduler
+from app.web.server import start_web_server
 
 logging.basicConfig(level=getattr(logging, settings.LOG_LEVEL, logging.INFO))
 logger = logging.getLogger(__name__)
@@ -43,6 +44,10 @@ async def main():
     await on_startup()
     app_logger.info("Bot started with %d admin(s) configured", len(settings.ADMIN_IDS))
 
+    web_runner = await start_web_server(
+        bot, host=settings.WEB_HOST, port=settings.WEB_PORT
+    )
+
     scheduler_task = asyncio.create_task(run_notification_scheduler(bot))
     app_logger.info("Notification scheduler started")
 
@@ -56,6 +61,7 @@ async def main():
         except asyncio.CancelledError:
             pass
         app_logger.info("Notification scheduler stopped")
+        await web_runner.cleanup()
         await on_shutdown()
         await bot.session.close()
 
