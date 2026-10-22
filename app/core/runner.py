@@ -6,6 +6,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 from app.bot.handlers import admin, panel_admin, shop_admin, user, wallet
 from app.bot.middleware import BlockedUserMiddleware
+from app.bot.auth import is_admin
 from app.config.settings import settings
 from app.database.session import init_db
 from app.utils.logger import logger as app_logger
@@ -20,6 +21,36 @@ async def on_startup():
     logger.info("Initializing database...")
     await init_db()
     logger.info("Database initialized!")
+
+
+async def setup_bot_menu(bot: Bot) -> None:
+    """Point the chat menu button at the Mini App and list the main commands."""
+    from aiogram.types import (
+        BotCommand,
+        MenuButtonWebApp,
+        WebAppInfo,
+    )
+
+    commands = [
+        BotCommand(command="start", description="باز کردن فروشگاه"),
+        BotCommand(command="usage", description="وضعیت اشتراک"),
+        BotCommand(command="referral", description="کد دعوت"),
+    ]
+    if is_admin(settings.ADMIN_IDS[0] if settings.ADMIN_IDS else 0):
+        commands.append(BotCommand(command="admin", description="پنل ادمین"))
+
+    try:
+        await bot.set_my_commands(commands)
+        if settings.MINIAPP_URL:
+            await bot.set_chat_menu_button(
+                menu_button=MenuButtonWebApp(
+                    text="فروشگاه",
+                    web_app=WebAppInfo(url=settings.MINIAPP_URL),
+                )
+            )
+        logger.info("Bot menu points at the Mini App")
+    except Exception as exc:
+        logger.warning("Could not set the bot menu: %s", exc)
 
 
 async def on_shutdown():
@@ -43,6 +74,8 @@ async def main():
 
     await on_startup()
     app_logger.info("Bot started with %d admin(s) configured", len(settings.ADMIN_IDS))
+
+    await setup_bot_menu(bot)
 
     web_runner = await start_web_server(
         bot, host=settings.WEB_HOST, port=settings.WEB_PORT

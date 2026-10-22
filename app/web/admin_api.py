@@ -63,6 +63,7 @@ def _plan_dict(plan) -> dict[str, Any]:
         "id": plan.id,
         "name": plan.name,
         "days": plan.days,
+        "traffic": plan.traffic_gb,
         "traffic_gb": plan.traffic_gb,
         "price": plan.price,
         "devices": plan.devices,
