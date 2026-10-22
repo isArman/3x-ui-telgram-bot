@@ -115,15 +115,46 @@ def test_update_payload_applies_the_requested_changes():
 
 
 def test_subscription_base_uses_panel_sub_path_and_port():
+    """Without a subscription certificate the sub server speaks plain HTTP."""
     settings = {
         "subEnable": True,
         "subURI": "",
         "subPath": "/sub/",
         "subPort": 2096,
         "subDomain": "",
+        "subKeyFile": "",
+        "subCertFile": "",
     }
     base = resolve_subscription_base_url(settings, "https://panel.example:2053/base/")
+    assert base == "http://panel.example:2096/sub/"
+
+
+def test_subscription_base_uses_https_when_the_sub_server_has_a_certificate():
+    settings = {
+        "subEnable": True,
+        "subURI": "",
+        "subPath": "/sub/",
+        "subPort": 2096,
+        "subDomain": "",
+        "subKeyFile": "/etc/x-ui/sub.key",
+        "subCertFile": "/etc/x-ui/sub.crt",
+    }
+    base = resolve_subscription_base_url(settings, "https://panel.example:2053/")
     assert base == "https://panel.example:2096/sub/"
+
+
+def test_subscription_base_drops_the_default_port():
+    settings = {
+        "subEnable": True,
+        "subURI": "",
+        "subPath": "/sub/",
+        "subPort": 443,
+        "subDomain": "sub.example.com",
+        "subKeyFile": "/etc/x-ui/sub.key",
+        "subCertFile": "/etc/x-ui/sub.crt",
+    }
+    base = resolve_subscription_base_url(settings, "https://panel.example:2053/")
+    assert base == "https://sub.example.com/sub/"
 
 
 def test_subscription_base_prefers_explicit_uri():

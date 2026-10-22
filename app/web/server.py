@@ -13,13 +13,19 @@ from aiohttp import web
 from app.utils.logger import logger
 from app.web import admin_api, api  # noqa: F401  (registers the routes)
 from app.web.api import auth_middleware
+from app.web.responses import ok
 
 STATIC_DIR = Path(__file__).parent / "static"
 
 
 def create_app(bot) -> web.Application:
     """Build the aiohttp application for the Mini App."""
-    app = web.Application(middlewares=[auth_middleware])
+    # The receipt upload is the only body that can be big, so the limit is set
+    # to the receipt size instead of aiohttp's 1 MiB default.
+    app = web.Application(
+        middlewares=[auth_middleware],
+        client_max_size=api.MAX_RECEIPT_BYTES,
+    )
     app["bot"] = bot
 
     app.add_routes(api.routes)
@@ -29,7 +35,7 @@ def create_app(bot) -> web.Application:
         return web.FileResponse(STATIC_DIR / "index.html")
 
     async def health(_request: web.Request) -> web.Response:
-        return web.json_response({"ok": True})
+        return ok({"status": "up"})
 
     app.router.add_get("/", index)
     app.router.add_get("/health", health)

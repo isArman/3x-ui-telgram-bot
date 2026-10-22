@@ -140,6 +140,28 @@ def prepare_client_update_payload(
         if field in old:
             payload[field] = old[field]
 
+    # ``allowedIPs`` is a comma separated string in the stored record but a list
+    # in the update payload. Sending the string makes the panel reject the whole
+    # body, so it has to be converted; an empty list is dropped instead (the
+    # panel then carries the stored value forward).
+    allowed = old.get("allowedIPs")
+    if isinstance(allowed, str):
+        allowed_ips = [part.strip() for part in allowed.split(",") if part.strip()]
+    elif isinstance(allowed, (list, tuple)):
+        allowed_ips = [str(part).strip() for part in allowed if str(part).strip()]
+    else:
+        allowed_ips = []
+    if allowed_ips:
+        payload["allowedIPs"] = allowed_ips
+    else:
+        payload.pop("allowedIPs", None)
+
+    # ``limitHwid`` lives next to the client in the update body. Leaving it out
+    # resets the panel's per-device HWID limit to zero on every update.
+    limit_hwid = old.get("limitHwid")
+    if limit_hwid is not None:
+        payload["limitHwid"] = int(limit_hwid)
+
     # id is the protocol UUID for the update endpoint.
     uuid_value = old.get("uuid") or existing_detail.get("uuid")
     if isinstance(uuid_value, str) and uuid_value:
@@ -187,12 +209,16 @@ class XUIClient:
         *,
         api_token: str | None = None,
         verify_ssl: bool | None = None,
+        base_path: str = "",
     ):
         self.base_url = base_url.rstrip("/")
         self.username = username
         self.password = password
         self.api_token = (api_token or "").strip()
         self.verify_ssl = settings.XUI_VERIFY_SSL if verify_ssl is None else verify_ssl
+        # The panel can live under a path prefix ("/panel"); every route is
+        # registered below it, so it has to be part of every URL we build.
+        self.base_path = normalize_base_path(base_path)
         self._client: Optional[httpx.AsyncClient] = None
         self._csrf_token_cache: str = ""
         self._logged_in = False
@@ -223,7 +249,7 @@ class XUIClient:
     def _url(self, path: str) -> str:
         if not path.startswith("/"):
             path = f"/{path}"
-        return f"{self.base_url}{path}"
+        return f"{self.base_url}{self.base_path}{path}"
 
     # --- authentication ----------------------------------------------------
 
@@ -461,7 +487,13 @@ class XUIClient:
             raise
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 404:
-                return None
+                # The panel answers a missing client with 200 + success:false,
+                # so a 404 means the route is wrong (base path) — not that the
+                # client is missing. Treating it as "missing" would create a
+                # second client for the same customer.
+                raise XUIError(
+                    f"Panel answered 404 for client {email} — check the panel base path"
+                ) from exc
             raise
         obj = data.get("obj")
         if obj is None:
@@ -645,6 +677,12 @@ def normalize_panel_url(raw: str) -> str:
     return raw
 
 
+def normalize_base_path(raw: str) -> str:
+    """The panel's path prefix ("/panel"), normalised to "" or "/prefix"."""
+    cleaned = (raw or "").strip().strip("/")
+    return f"/{cleaned}" if cleaned else ""
+
+
 def resolve_subscription_base_url(
     panel_settings: dict[str, Any],
     panel_url: str,
@@ -655,6 +693,11 @@ def resolve_subscription_base_url(
     The panel serves subscriptions from ``subPath`` on ``subPort`` (optionally
     on a dedicated ``subDomain``), or from an explicit ``subURI`` override.
     The result ends with ``/`` — append the client's subId for the full link.
+
+    The scheme follows the *subscription* server, not the panel: the panel is
+    often behind HTTPS while the subscription server still speaks plain HTTP,
+    and the panel itself derives the scheme from its subscription certificate
+    (``subKeyFile`` + ``subCertFile``).
     """
     if not panel_settings.get("subEnable", False):
         raise XUIError(
@@ -677,6 +720,12 @@ def resolve_subscription_base_url(
     if not host:
         raise XUIError("Could not determine subscription host from panel settings")
 
+    sub_tls = bool(
+        (panel_settings.get("subKeyFile") or "").strip()
+        and (panel_settings.get("subCertFile") or "").strip()
+    )
+    scheme = "https" if sub_tls else "http"
+
     sub_port = int(panel_settings.get("subPort") or 0)
     sub_path = panel_settings.get("subPath") or "/sub/"
     if not sub_path.startswith("/"):
@@ -685,7 +734,7 @@ def resolve_subscription_base_url(
         sub_path = f"{sub_path}/"
 
     if sub_port <= 0:
-        sub_port = parsed.port or (443 if scheme == "https" else 80)
+        sub_port = 443 if sub_tls else 80
 
     default_port = 443 if scheme == "https" else 80
     netloc = host if sub_port == default_port else f"{host}:{sub_port}"

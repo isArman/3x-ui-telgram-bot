@@ -4,9 +4,7 @@ import logging
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 
-from app.bot.handlers import admin, panel_admin, shop_admin, user, wallet
-from app.bot.middleware import BlockedUserMiddleware
-from app.bot.auth import is_admin
+from app.bot import launcher, payments
 from app.config.settings import settings
 from app.database.session import init_db
 from app.utils.logger import logger as app_logger
@@ -31,13 +29,11 @@ async def setup_bot_menu(bot: Bot) -> None:
         WebAppInfo,
     )
 
+    # Only the commands the bot actually answers are advertised.
     commands = [
         BotCommand(command="start", description="باز کردن فروشگاه"),
-        BotCommand(command="usage", description="وضعیت اشتراک"),
-        BotCommand(command="referral", description="کد دعوت"),
+        BotCommand(command="app", description="باز کردن فروشگاه"),
     ]
-    if is_admin(settings.ADMIN_IDS[0] if settings.ADMIN_IDS else 0):
-        commands.append(BotCommand(command="admin", description="پنل ادمین"))
 
     try:
         await bot.set_my_commands(commands)
@@ -63,14 +59,9 @@ async def main():
     bot = Bot(token=settings.BOT_TOKEN)
     storage = MemoryStorage()
     dp = Dispatcher(storage=storage)
-    dp.message.middleware(BlockedUserMiddleware())
-    dp.callback_query.middleware(BlockedUserMiddleware())
 
-    dp.include_router(panel_admin.router)
-    dp.include_router(shop_admin.router)
-    dp.include_router(admin.router)
-    dp.include_router(wallet.router)
-    dp.include_router(user.router)
+    dp.include_router(payments.router)
+    dp.include_router(launcher.router)
 
     await on_startup()
     app_logger.info("Bot started with %d admin(s) configured", len(settings.ADMIN_IDS))

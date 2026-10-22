@@ -89,6 +89,10 @@ class Settings:
         required = {
             "BOT_TOKEN": self.BOT_TOKEN,
             "ADMIN_IDS": self.ADMIN_IDS,
+            # The panel credentials are encrypted with this key. A missing key
+            # would fall back to the bot token, and rotating the token would
+            # make the stored credentials unreadable.
+            "SECRET_KEY": self.SECRET_KEY,
         }
         missing = [key for key, value in required.items() if not value]
         if missing:

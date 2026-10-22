@@ -4,13 +4,10 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import logging
 
 from cryptography.fernet import Fernet, InvalidToken
 
 from app.config.settings import settings
-
-logger = logging.getLogger(__name__)
 _fernet: Fernet | None = None
 
 
@@ -19,11 +16,13 @@ def _get_fernet() -> Fernet:
     if _fernet is not None:
         return _fernet
 
-    raw = settings.SECRET_KEY or settings.BOT_TOKEN
-    if not settings.SECRET_KEY:
-        logger.warning(
-            "SECRET_KEY is not set — deriving encryption key from BOT_TOKEN. "
-            "Set SECRET_KEY in .env for production."
+    raw = settings.SECRET_KEY
+    if not raw:
+        # Falling back to the bot token would make every stored credential
+        # unreadable as soon as the token is rotated.
+        raise RuntimeError(
+            "SECRET_KEY is not set — the panel credentials cannot be encrypted. "
+            "Set SECRET_KEY in .env."
         )
     key = base64.urlsafe_b64encode(hashlib.sha256(raw.encode()).digest())
     _fernet = Fernet(key)

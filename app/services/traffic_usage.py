@@ -14,7 +14,7 @@ Older panels only ever returned the ``traffic`` object, so both are accepted.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 GB = 1024**3
 LOW_TRAFFIC_THRESHOLD_PERCENT = 10.0

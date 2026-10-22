@@ -82,6 +82,10 @@ async def _migrate_sqlite_columns(conn):
         await conn.execute(
             text("ALTER TABLE panel_settings ADD COLUMN panel_api_token VARCHAR(255)")
         )
+    if "panel_base_path" not in panel_cols:
+        await conn.execute(
+            text("ALTER TABLE panel_settings ADD COLUMN panel_base_path VARCHAR(255)")
+        )
 
     result = await conn.execute(text("PRAGMA table_info(shop_plans)"))
     plan_cols = {row[1] for row in result.fetchall()}
@@ -129,6 +133,14 @@ async def _migrate_sqlite_columns(conn):
 
     result = await conn.execute(text("PRAGMA table_info(users)"))
     user_cols = {row[1] for row in result.fetchall()}
+    if "referral_cashback_earned" not in user_cols:
+        await conn.execute(
+            text(
+                "ALTER TABLE users "
+                "ADD COLUMN referral_cashback_earned INTEGER DEFAULT 0"
+            )
+        )
+
     if "trial_used_at" not in user_cols:
         await conn.execute(
             text("ALTER TABLE users ADD COLUMN trial_used_at DATETIME")
@@ -153,6 +165,17 @@ async def _migrate_sqlite_columns(conn):
                 "ALTER TABLE vpn_accounts "
                 "ADD COLUMN traffic_low_notified BOOLEAN DEFAULT 0"
             )
+        )
+    if "expiry_notified" not in vpn_cols:
+        await conn.execute(
+            text(
+                "ALTER TABLE vpn_accounts "
+                "ADD COLUMN expiry_notified BOOLEAN DEFAULT 0"
+            )
+        )
+    if "last_renewed_at" not in vpn_cols:
+        await conn.execute(
+            text("ALTER TABLE vpn_accounts ADD COLUMN last_renewed_at DATETIME")
         )
 
 

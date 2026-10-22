@@ -4,7 +4,6 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import Order, PanelSettings, User, VPNAccount
@@ -81,46 +80,6 @@ async def resolve_live_inbound_ids(
     return valid
 
 
-async def sync_active_clients_inbounds(
-    session: AsyncSession,
-    settings: PanelSettings,
-    inbound_ids: list[int],
-) -> tuple[int, int]:
-    """
-    Re-sync inbound membership for all active VPN users to the selected set.
-    Returns (ok_count, fail_count).
-    """
-    result = await session.execute(
-        select(User)
-        .join(VPNAccount, VPNAccount.user_id == User.id)
-        .where(VPNAccount.is_active.is_(True))
-        .distinct()
-    )
-    users = list(result.scalars().all())
-    if not users:
-        return 0, 0
-
-    ok = 0
-    fail = 0
-    async with xui_client_for_panel(settings) as client:
-        for user in users:
-            email = panel_client_email(user)
-            try:
-                existing = await client.get_client(email)
-                if not existing:
-                    continue
-                await client.sync_client_inbounds(email, inbound_ids)
-                ok += 1
-            except Exception as exc:
-                fail += 1
-                logger.error(
-                    "Failed to sync inbounds for client %s: %s",
-                    email,
-                    exc,
-                )
-    return ok, fail
-
-
 async def provision_subscription_detailed(
     session: AsyncSession,
     settings: PanelSettings,
@@ -176,8 +135,12 @@ async def provision_subscription_detailed(
                 # device count needs an explicit update. The full record is sent
                 # because the panel replaces the row.
                 if int(client_data.get("limitIp") or 0) != device_limit:
+                    # The update replaces the stored quota and expiry, so it has
+                    # to carry the values the panel holds *now* — the snapshot
+                    # taken before bulkAdjust would roll the renewal back.
+                    current = await client.get_client(email) or existing_client
                     payload = prepare_client_update_payload(
-                        existing_client or {},
+                        current,
                         email=email,
                         limit_ip=device_limit,
                     )

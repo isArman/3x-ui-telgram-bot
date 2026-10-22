@@ -88,11 +88,6 @@ async def get_plan(
     return plan_to_dict(plan)
 
 
-async def get_plan_row(session: AsyncSession, plan_id: str) -> ShopPlan | None:
-    result = await session.execute(select(ShopPlan).where(ShopPlan.id == plan_id))
-    return result.scalar_one_or_none()
-
-
 async def count_plans(session: AsyncSession) -> int:
     result = await session.execute(select(func.count()).select_from(ShopPlan))
     return int(result.scalar_one())

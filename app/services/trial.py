@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import Order, User, VPNAccount
@@ -108,6 +108,17 @@ async def create_trial_order(
     return order
 
 
-async def mark_trial_used(session: AsyncSession, user: User) -> None:
-    user.trial_used_at = datetime.utcnow()
-    await session.flush()
+async def claim_trial(session: AsyncSession, user: User) -> bool:
+    """
+    Atomically claim the one free trial of this user.
+
+    Returns False when the trial was already taken, so two parallel requests
+    can never create two free subscriptions.
+    """
+    claimed = await session.execute(
+        update(User)
+        .where(User.id == user.id, User.trial_used_at.is_(None))
+        .values(trial_used_at=datetime.utcnow())
+        .execution_options(synchronize_session=False)
+    )
+    return claimed.rowcount == 1

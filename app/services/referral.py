@@ -5,7 +5,7 @@ from __future__ import annotations
 import secrets
 import string
 
-from sqlalchemy import func, select, update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import Order, User
@@ -152,48 +152,16 @@ def preview_discounted_price(list_price: int, *, eligible: bool) -> tuple[int, i
     return price, price, False
 
 
-def format_price_block(
-    list_price: int,
-    *,
-    payable: int | None = None,
-    applied: bool = False,
-) -> str:
-    """Human-readable price lines for confirms / checkout (no hype)."""
-    original = int(list_price)
-    if applied and payable is not None and int(payable) < original:
-        pay = int(payable)
-        saved = original - pay
-        return (
-            f"مبلغ قابل پرداخت: {pay:,} تومان\n"
-            f"قیمت پلن: {original:,} تومان\n"
-            f"تخفیف معرفی ({DISCOUNT_PERCENT}٪): −{saved:,} تومان"
-        )
-    return f"قیمت: {original:,} تومان"
-
-
-def format_order_price_lines(order: Order) -> str:
-    """Price summary for an already-created order."""
-    payable = int(order.price)
-    original = int(
-        order.original_price if order.original_price is not None else order.price
-    )
-    return format_price_block(
-        original,
-        payable=payable,
-        applied=bool(order.referral_discount_applied) and payable < original,
-    )
-
-
 async def grant_referral_cashback(
     session: AsyncSession, order: Order
 ) -> tuple[int, int] | None:
     """
-    Credit referrer 20% of original_price once for a discounted first purchase.
+    Credit the referrer a share of a discounted first purchase.
+
+    The share is a percentage of what the buyer actually paid, so a promo
+    code can never make the shop pay out more than it received.
 
     Returns (referrer_id, amount) if any credit was made.
-
-    The cashback flag is claimed with a conditional UPDATE first, so two
-    concurrent approvals of the same order can never credit the referrer twice.
     """
     if order.referral_cashback_paid:
         return None
@@ -210,7 +178,7 @@ async def grant_referral_cashback(
         await session.flush()
         return None
 
-    base = int(order.original_price if order.original_price is not None else order.price)
+    base = max(int(order.price or 0), 0)
     cashback = base * CASHBACK_PERCENT // 100
     if cashback < 1:
         order.referral_cashback_paid = True
@@ -243,9 +211,22 @@ async def grant_referral_cashback(
 
     referrer_id = int(buyer.referred_by_user_id)
     await credit_balance(session, referrer_id, cashback)
+    await _add_cashback_earned(session, referrer_id, cashback)
     order.referral_cashback_paid = True
     await session.flush()
     return referrer_id, cashback
+
+
+async def _add_cashback_earned(
+    session: AsyncSession, user_id: int, amount: int
+) -> None:
+    """Remember how much cashback this customer has earned."""
+    await session.execute(
+        update(User)
+        .where(User.id == user_id)
+        .values(referral_cashback_earned=User.referral_cashback_earned + int(amount))
+        .execution_options(synchronize_session=False)
+    )
 
 
 async def grant_referral_cashback_level2(
@@ -306,7 +287,7 @@ async def grant_referral_cashback_level2(
         await session.flush()
         return None
 
-    base = int(order.original_price if order.original_price is not None else order.price)
+    base = max(int(order.price or 0), 0)
     amount = base * CASHBACK_LEVEL2_PERCENT // 100
     level2_id = int(level1.referred_by_user_id)
     if amount < 1 or level2_id == order.user_id:
@@ -314,6 +295,7 @@ async def grant_referral_cashback_level2(
         return None
 
     await credit_balance(session, level2_id, amount)
+    await _add_cashback_earned(session, level2_id, amount)
     await session.flush()
     return level2_id, amount
 

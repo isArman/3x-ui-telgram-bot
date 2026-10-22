@@ -17,6 +17,7 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     is_blocked: Mapped[bool] = mapped_column(Boolean, default=False)
     balance: Mapped[int] = mapped_column(Integer, default=0)
+    referral_cashback_earned: Mapped[int] = mapped_column(Integer, default=0)
     trial_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     referral_code: Mapped[Optional[str]] = mapped_column(
         String(32), unique=True, nullable=True, index=True
@@ -143,6 +144,7 @@ class PanelSettings(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
     panel_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    panel_base_path: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     panel_username: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     panel_password: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     panel_api_token: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)

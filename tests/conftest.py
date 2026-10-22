@@ -4,6 +4,7 @@ import os
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 os.environ.setdefault("SECRET_KEY", "test-secret-key-for-encryption-only")
 os.environ.setdefault("BOT_TOKEN", "test:1234567890")
+os.environ.setdefault("MINIAPP_URL", "https://mini.example/app/")
 
 import pytest
 from sqlalchemy import text

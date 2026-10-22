@@ -3,6 +3,8 @@
 import hashlib
 import hmac
 import json
+import pathlib
+import re
 import time
 from urllib.parse import urlencode
 
@@ -127,8 +129,9 @@ async def test_api_rejects_tampered_launch_data(client):
 async def test_me_returns_the_profile(client):
     resp = await client.get("/api/me", headers=await _auth(client))
     assert resp.status == 200
-    data = await resp.json()
-    assert data["ok"] is True
+    body = await resp.json()
+    assert body["ok"] is True
+    data = body["data"]
     assert data["user"]["id"] == 555
     assert "balance" in data
     assert "referral_code" in data
@@ -149,8 +152,8 @@ async def test_plans_endpoint_lists_active_plans(client):
         await session.commit()
 
     resp = await client.get("/api/plans", headers=await _auth(client))
-    data = await resp.json()
-    ids = [p["id"] for p in data["plans"]]
+    body = await resp.json()
+    ids = [p["id"] for p in body["data"]["plans"]]
     assert "apiplan" in ids
     assert "apioff" not in ids
 
@@ -172,8 +175,9 @@ async def test_quote_applies_a_promo_code(client):
         headers=await _auth(client),
         json={"plan_id": "quoteplan", "promo_code": "HALF"},
     )
-    data = await resp.json()
-    assert data["ok"] is True
+    body = await resp.json()
+    assert body["ok"] is True
+    data = body["data"]
     assert data["base_price"] == 100000
     assert data["promo_discount"] == 50000
     assert data["total"] == 50000
@@ -182,6 +186,9 @@ async def test_quote_applies_a_promo_code(client):
 async def test_admin_routes_are_forbidden_for_customers(client):
     resp = await client.get("/api/admin/dashboard", headers=await _auth(client))
     assert resp.status == 403
+    body = await resp.json()
+    assert body["ok"] is False
+    assert body["code"] == "forbidden"
 
 
 async def test_index_page_is_served(client):
@@ -189,3 +196,114 @@ async def test_index_page_is_served(client):
     assert resp.status == 200
     body = await resp.text()
     assert "telegram-web-app.js" in body
+
+
+async def test_static_assets_are_served(client):
+    for path in ("/assets/app.js", "/assets/app.css"):
+        resp = await client.get(path)
+        assert resp.status == 200, path
+        assert await resp.text()
+
+
+# --- the frontend must not call an endpoint that does not exist ------------
+
+
+def _api_calls(source: str) -> list[str]:
+    """The argument list of every ``api(...)`` call in the Mini App."""
+    calls = []
+    for match in re.finditer(r"\bapi\(", source):
+        index = match.end()
+        depth = 1
+        while index < len(source) and depth:
+            char = source[index]
+            if char in "([{":
+                depth += 1
+            elif char in ")]}":
+                depth -= 1
+            index += 1
+        calls.append(source[match.end() : index - 1])
+    return calls
+
+
+def _split_args(args: str) -> list[str]:
+    parts = []
+    depth = 0
+    current = ""
+    for char in args:
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+        if char == "," and depth == 0:
+            parts.append(current)
+            current = ""
+            continue
+        current += char
+    if current.strip():
+        parts.append(current)
+    return parts
+
+
+def _frontend_calls() -> list[tuple[str, str]]:
+    """(method, path) of every API call the Mini App makes."""
+    source = pathlib.Path("app/web/static/app.js").read_text()
+    calls = []
+    for args in _api_calls(source):
+        parts = _split_args(args)
+        if not parts:
+            continue
+        expression = parts[0]
+        pieces = []
+        last = 0
+        for literal in re.finditer(r'"([^"]*)"', expression):
+            if expression[last : literal.start()].strip():
+                pieces.append("{x}")
+            pieces.append(literal.group(1))
+            last = literal.end()
+        if expression[last:].strip():
+            pieces.append("{x}")
+        path = "".join(pieces)
+        if not path.startswith("/api/"):
+            continue
+        path = path.split("?")[0]
+        options = " ".join(parts[1:])
+        method = "POST" if "body" in options else "GET"
+        explicit = re.search(r'method:\s*"(\w+)"', options)
+        if explicit:
+            method = explicit.group(1)
+        calls.append((method, path))
+    return calls
+
+
+def _server_routes() -> set[tuple[str, str]]:
+    from app.web import admin_api, api
+
+    routes = set()
+    for table in (api.routes, admin_api.routes):
+        for route in table:
+            path = re.sub(r"\{[^}]+\}", "{x}", route.path)
+            routes.add((route.method, path))
+    return routes
+
+
+def test_frontend_only_calls_registered_endpoints():
+    """The Mini App must not call an endpoint the server does not serve."""
+    known = _server_routes()
+    missing = []
+    for method, path in _frontend_calls():
+        if (method, path) in known:
+            continue
+        # A dynamic tail (e.g. "/api/orders/{x}") only needs a matching prefix.
+        if path.endswith("/{x}"):
+            prefix = path[: -len("{x}")]
+            if any(route[0] == method and route[1].startswith(prefix) for route in known):
+                continue
+        missing.append(f"{method} {path}")
+    assert not missing, f"The Mini App calls unknown endpoints: {missing}"
+
+
+def test_frontend_uses_the_response_envelope():
+    """The Mini App reads ``data`` from the standard envelope."""
+    source = pathlib.Path("app/web/static/app.js").read_text()
+    assert "payload.data" in source
+    assert "payload.ok === false" in source

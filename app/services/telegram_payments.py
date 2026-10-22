@@ -38,9 +38,15 @@ def price_to_stars(price_toman: int, rate: int) -> int:
     return max(1, math.ceil(price / rate))
 
 
-def stars_to_toman(stars: int, rate: int) -> int:
-    rate = max(int(rate or 1), 1)
-    return max(int(stars or 0), 0) * rate
+def stars_amount(stars: int) -> int:
+    """
+    The invoice amount for a number of stars.
+
+    Telegram Stars have no sub-unit: the smallest unit of XTR is one star, so
+    the invoice amount is the star count itself. Multiplying by 100 would
+    charge the customer 100 times the intended price.
+    """
+    return max(int(stars or 0), 0)
 
 
 def invoice_payload(order_id: int) -> str:
@@ -76,7 +82,7 @@ async def send_stars_invoice(
         prices=[
             LabeledPrice(
                 label=f"{stars} ⭐",
-                amount=stars * 100,  # Telegram wants the smallest unit
+                amount=stars_amount(stars),
             )
         ],
     )

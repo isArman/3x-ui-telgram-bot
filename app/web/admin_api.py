@@ -1,19 +1,28 @@
 """Admin API for the Mini App.
 
-Everything here requires an admin Telegram id; the auth middleware already
+Everything here needs an admin Telegram id; the auth middleware already
 rejects unauthenticated callers, and these routes check the admin list.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Optional
+import time
+from typing import Any
 
 from aiohttp import web
-from sqlalchemy import func, select
+from sqlalchemy import select, update
 
 from app.config.settings import settings
-from app.database.models import Order, Payment, PlanConfig, PromoCode, User, VPNAccount, WalletTopUp
+from app.database.models import (
+    Order,
+    Payment,
+    PlanConfig,
+    PromoCode,
+    User,
+    VPNAccount,
+    WalletTopUp,
+)
 from app.database.session import AsyncSessionLocal
 from app.services.bot_settings import set_bot_settings
 from app.services.broadcast import (
@@ -23,18 +32,30 @@ from app.services.broadcast import (
     send_broadcast,
 )
 from app.services.config_inventory import add_config, count_available
+from app.services.fulfillment import deliver_paid_order
+from app.services.panel_settings import (
+    get_panel_api_token,
+    get_panel_password,
+    get_panel_settings,
+    get_selected_inbound_ids,
+    set_panel_api_token,
+    set_selected_inbound_ids,
+    update_panel_settings,
+    xui_client_for_panel,
+)
 from app.services.plans_catalog import (
     create_plan,
     delete_plan,
     get_plan,
+    get_pricing,
     list_all_plans,
     set_plan_active,
+    set_pricing,
     update_plan_fields,
 )
 from app.services.promocodes import (
     create_promo,
     delete_promo,
-    get_promo,
     list_promos,
     set_promo_active,
 )
@@ -42,7 +63,23 @@ from app.services.users import find_user, get_user_summary, set_user_blocked
 from app.services.wallet import credit_balance
 from app.utils.logger import logger
 from app.utils.statistics import get_dashboard_stats
-from app.web.api import _error, _json, _require_admin, routes
+from app.utils.validation import is_valid_config_text
+from app.web.api import _json_body
+from app.web.fields import FieldError, optional_bool, optional_int, optional_text
+from app.web.responses import ApiError, fail, not_found, ok
+
+routes = web.RouteTableDef()
+
+
+def _admin(request: web.Request) -> int:
+    """The admin's Telegram id, or raise an error the client understands."""
+    user = request.get("telegram_user") or {}
+    user_id = int(user.get("id") or 0)
+    if not user_id:
+        raise ApiError("دسترسی نامعتبر است.", status=401, code="unauthorized")
+    if user_id not in settings.ADMIN_IDS:
+        raise ApiError("دسترسی ندارید.", status=403, code="forbidden")
+    return user_id
 
 
 def _promo_dict(promo: PromoCode) -> dict[str, Any]:
@@ -73,30 +110,100 @@ def _plan_dict(plan) -> dict[str, Any]:
     }
 
 
+def _panel_dict(panel) -> dict[str, Any]:
+    """The stored panel connection, without the secrets."""
+    return {
+        "url": panel.panel_url or "",
+        "base_path": panel.panel_base_path or "",
+        "username": panel.panel_username or "",
+        "has_password": bool(panel.panel_password),
+        "has_token": bool(get_panel_api_token(panel)),
+        "mode": panel.provisioning_mode,
+        "verified": bool(panel.is_verified),
+        "subscription_base_url": panel.subscription_base_url or "",
+        "selected_inbound_ids": get_selected_inbound_ids(panel),
+    }
+
+
+def _order_dict(order: Order) -> dict[str, Any]:
+    return {
+        "id": order.id,
+        "user_id": order.user_id,
+        "days": order.days,
+        "traffic_gb": order.traffic_gb,
+        "price": order.price,
+        "original_price": order.original_price,
+        "plan_id": order.plan_id,
+        "promo_code": order.promo_code,
+        "device_limit": order.device_limit,
+        "status": order.status,
+        "created_at": order.created_at.strftime("%Y-%m-%d %H:%M"),
+    }
+
+
+# --- dashboard -------------------------------------------------------------
+
+
 @routes.get("/api/admin/dashboard")
 async def admin_dashboard(request: web.Request) -> web.Response:
-    await _require_admin(request)
+    _admin(request)
     async with AsyncSessionLocal() as session:
         stats = await get_dashboard_stats(session)
         plans = await list_all_plans(session)
-        stock = {
-            plan.id: await count_available(session, plan.id) for plan in plans
-        }
-    return _json({"ok": True, "stats": stats, "stock": stock})
+        stock = {plan.id: await count_available(session, plan.id) for plan in plans}
+    return ok({"stats": stats, "stock": stock})
+
+
+@routes.get("/api/admin/payments")
+async def admin_payments(request: web.Request) -> web.Response:
+    """The payment history, newest first."""
+    _admin(request)
+    try:
+        limit = min(int(request.query.get("limit", 50)), 200)
+    except (TypeError, ValueError):
+        limit = 50
+
+    async with AsyncSessionLocal() as session:
+        rows = (
+            await session.execute(
+                select(Payment, Order)
+                .join(Order, Order.id == Payment.order_id)
+                .order_by(Payment.created_at.desc())
+                .limit(limit)
+            )
+        ).all()
+        items = [
+            {
+                "id": payment.id,
+                "order_id": payment.order_id,
+                "user_id": payment.user_id,
+                "method": payment.method,
+                "status": payment.status,
+                "amount": order.price,
+                "days": order.days,
+                "traffic_gb": order.traffic_gb,
+                "receipt_file_id": payment.receipt_file_id,
+                "admin_note": payment.admin_note,
+                "created_at": payment.created_at.strftime("%Y-%m-%d %H:%M"),
+            }
+            for payment, order in rows
+        ]
+    return ok({"payments": items})
 
 
 @routes.get("/api/admin/pending")
 async def admin_pending(request: web.Request) -> web.Response:
-    await _require_admin(request)
+    _admin(request)
     async with AsyncSessionLocal() as session:
-        payments = (
+        rows = (
             await session.execute(
-                select(Payment)
+                select(Payment, Order)
+                .join(Order, Order.id == Payment.order_id)
                 .where(Payment.status == "pending")
                 .order_by(Payment.created_at.desc())
                 .limit(50)
             )
-        ).scalars().all()
+        ).all()
         topups = (
             await session.execute(
                 select(WalletTopUp)
@@ -107,12 +214,7 @@ async def admin_pending(request: web.Request) -> web.Response:
         ).scalars().all()
 
         items = []
-        for payment in payments:
-            order = (
-                await session.execute(
-                    select(Order).where(Order.id == payment.order_id)
-                )
-            ).scalar_one_or_none()
+        for payment, order in rows:
             items.append(
                 {
                     "kind": "order",
@@ -120,10 +222,10 @@ async def admin_pending(request: web.Request) -> web.Response:
                     "order_id": payment.order_id,
                     "user_id": payment.user_id,
                     "method": payment.method,
-                    "amount": order.price if order else 0,
-                    "wallet_debit": order.wallet_debit if order else 0,
-                    "days": order.days if order else 0,
-                    "traffic_gb": order.traffic_gb if order else 0,
+                    "amount": order.price,
+                    "wallet_debit": order.wallet_debit,
+                    "days": order.days,
+                    "traffic_gb": order.traffic_gb,
                     "receipt_file_id": payment.receipt_file_id,
                     "created_at": payment.created_at.strftime("%Y-%m-%d %H:%M"),
                 }
@@ -138,94 +240,99 @@ async def admin_pending(request: web.Request) -> web.Response:
                     "created_at": topup.created_at.strftime("%Y-%m-%d %H:%M"),
                 }
             )
-    return _json({"ok": True, "items": items})
+    return ok({"items": items})
 
 
 @routes.post("/api/admin/payments/{payment_id}/approve")
 async def admin_approve_payment(request: web.Request) -> web.Response:
-    await _require_admin(request)
+    """Approve a card payment and deliver the order."""
+    _admin(request)
     payment_id = int(request.match_info["payment_id"])
     bot = request.app["bot"]
 
     async with AsyncSessionLocal() as session:
-        payment = (
-            await session.execute(select(Payment).where(Payment.id == payment_id))
-        ).scalar_one_or_none()
-        if not payment or payment.status != "pending":
-            return _error("پرداخت پیدا نشد یا قبلاً بررسی شده.")
-        order = (
-            await session.execute(select(Order).where(Order.id == payment.order_id))
-        ).scalar_one_or_none()
-        if not order:
-            return _error("سفارش پیدا نشد.", status=404)
-        plan = await get_plan(session, order.plan_id) if order.plan_id else None
-        from app.services.order_fulfillment import fulfill_paid_order
-
-        fulfill = await fulfill_paid_order(
-            session, payment, order, None, plan["name"] if plan else None
+        # Claim the payment first: only one request can move it out of
+        # "pending", so a double click cannot deliver the order twice.
+        claimed = await session.execute(
+            update(Payment)
+            .where(Payment.id == payment_id, Payment.status == "pending")
+            .values(status="approved")
+            .execution_options(synchronize_session=False)
         )
+        if claimed.rowcount != 1:
+            await session.rollback()
+            return fail("پرداخت پیدا نشد یا قبلاً بررسی شده.", code="not_pending")
+        order_id = (
+            await session.execute(select(Payment.order_id).where(Payment.id == payment_id))
+        ).scalar_one()
+        await session.commit()
 
-    if fulfill.kind in ("new_auto", "new_inventory") and fulfill.config_text:
-        await bot.send_message(
-            chat_id=order.user_id,
-            text=(
-                "پرداخت شما تایید شد. اکانت شما آماده است:\n"
-                f"{fulfill.config_text}"
-            ),
-        )
-    elif fulfill.kind in ("renewal_auto", "renewal_db") and fulfill.vpn_account:
-        await bot.send_message(
-            chat_id=order.user_id,
-            text=(
-                "تمدید تایید شد.\n"
-                f"انقضای جدید: {fulfill.vpn_account.expires_at:%Y-%m-%d}\n"
-                f"لینک اشتراک: {fulfill.vpn_account.subscription_path}"
-            ),
-        )
-    else:
-        from app.bot.handlers.admin import notify_admins_wallet_manual
-
-        await notify_admins_wallet_manual(bot, payment, order)
-
-    return _json({"ok": True, "kind": fulfill.kind})
+    delivery = await deliver_paid_order(bot, order_id, payment_id)
+    return ok({"delivery": delivery.kind})
 
 
 @routes.post("/api/admin/payments/{payment_id}/reject")
 async def admin_reject_payment(request: web.Request) -> web.Response:
-    await _require_admin(request)
+    """Reject a card payment and refund any wallet debit."""
+    _admin(request)
     payment_id = int(request.match_info["payment_id"])
     bot = request.app["bot"]
 
     async with AsyncSessionLocal() as session:
+        order_id = (
+            await session.execute(
+                select(Payment.order_id).where(Payment.id == payment_id)
+            )
+        ).scalar_one_or_none()
+        if order_id is None:
+            return not_found("پرداخت پیدا نشد.")
+
+        claimed = await session.execute(
+            update(Payment)
+            .where(Payment.id == payment_id, Payment.status == "pending")
+            .values(status="rejected")
+            .execution_options(synchronize_session=False)
+        )
+        if claimed.rowcount != 1:
+            await session.rollback()
+            return fail("پرداخت پیدا نشد یا قبلاً بررسی شده.", code="not_pending")
+
+        order = (
+            await session.execute(select(Order).where(Order.id == order_id))
+        ).scalar_one_or_none()
+
         payment = (
             await session.execute(select(Payment).where(Payment.id == payment_id))
         ).scalar_one_or_none()
-        if not payment or payment.status != "pending":
-            return _error("پرداخت پیدا نشد یا قبلاً بررسی شده.")
-        order = (
-            await session.execute(select(Order).where(Order.id == payment.order_id))
-        ).scalar_one_or_none()
-        payment.status = "rejected"
         payment.reviewed_at = datetime.utcnow()
+        refunded = 0
         if order:
             order.status = "rejected"
             if order.wallet_debit:
-                await credit_balance(session, order.user_id, order.wallet_debit)
+                refunded = int(order.wallet_debit)
+                await credit_balance(session, order.user_id, refunded)
                 order.wallet_debit = 0
         await session.commit()
+        user_id = order.user_id if order else 0
 
-    if order:
-        await bot.send_message(
-            chat_id=order.user_id,
-            text="پرداخت شما تایید نشد. اگر فکر می‌کنید اشتباه شده با پشتیبانی تماس بگیرید.",
-        )
+    if user_id:
+        try:
+            await bot.send_message(
+                chat_id=user_id,
+                text=(
+                    "پرداخت شما تایید نشد."
+                    + (f"\n{refunded:,} تومان به کیف پول شما برگشت." if refunded else "")
+                ),
+            )
+        except Exception as exc:
+            logger.warning("Could not notify the customer: %s", exc)
 
-    return _json({"ok": True})
+    return ok({"refunded": refunded})
 
 
 @routes.post("/api/admin/topups/{topup_id}/approve")
 async def admin_approve_topup(request: web.Request) -> web.Response:
-    await _require_admin(request)
+    _admin(request)
     topup_id = int(request.match_info["topup_id"])
     bot = request.app["bot"]
 
@@ -236,23 +343,30 @@ async def admin_approve_topup(request: web.Request) -> web.Response:
             )
         ).scalar_one_or_none()
         if not topup or topup.status != "pending":
-            return _error("درخواست پیدا نشد یا قبلاً بررسی شده.")
-        amount = int(request.query.get("amount") or topup.requested_amount)
+            return fail("درخواست پیدا نشد یا قبلاً بررسی شده.", code="not_pending")
+        amount = int(topup.requested_amount)
         topup.status = "approved"
         topup.credited_amount = amount
         balance = await credit_balance(session, topup.user_id, amount)
         await session.commit()
 
-    await bot.send_message(
-        chat_id=topup.user_id,
-        text=f"شارژ کیف پول تایید شد.\nمبلغ: {amount:,} تومان\nموجودی: {balance:,} تومان",
-    )
-    return _json({"ok": True, "balance": balance})
+    try:
+        await bot.send_message(
+            chat_id=topup.user_id,
+            text=(
+                f"شارژ کیف پول تایید شد.\n"
+                f"مبلغ: {amount:,} تومان\nموجودی: {balance:,} تومان"
+            ),
+        )
+    except Exception as exc:
+        logger.warning("Could not notify the customer: %s", exc)
+
+    return ok({"balance": balance})
 
 
 @routes.post("/api/admin/topups/{topup_id}/reject")
 async def admin_reject_topup(request: web.Request) -> web.Response:
-    await _require_admin(request)
+    _admin(request)
     topup_id = int(request.match_info["topup_id"])
     bot = request.app["bot"]
 
@@ -263,14 +377,18 @@ async def admin_reject_topup(request: web.Request) -> web.Response:
             )
         ).scalar_one_or_none()
         if not topup or topup.status != "pending":
-            return _error("درخواست پیدا نشد یا قبلاً بررسی شده.")
+            return fail("درخواست پیدا نشد یا قبلاً بررسی شده.", code="not_pending")
         topup.status = "rejected"
         await session.commit()
 
-    await bot.send_message(
-        chat_id=topup.user_id, text="درخواست شارژ کیف پول شما تایید نشد."
-    )
-    return _json({"ok": True})
+    try:
+        await bot.send_message(
+            chat_id=topup.user_id, text="درخواست شارژ کیف پول شما تایید نشد."
+        )
+    except Exception as exc:
+        logger.warning("Could not notify the customer: %s", exc)
+
+    return ok({})
 
 
 # --- plans -----------------------------------------------------------------
@@ -278,19 +396,17 @@ async def admin_reject_topup(request: web.Request) -> web.Response:
 
 @routes.get("/api/admin/plans")
 async def admin_plans(request: web.Request) -> web.Response:
-    await _require_admin(request)
+    _admin(request)
     async with AsyncSessionLocal() as session:
         plans = await list_all_plans(session)
         stock = {p.id: await count_available(session, p.id) for p in plans}
-    return _json(
-        {"ok": True, "plans": [_plan_dict(p) for p in plans], "stock": stock}
-    )
+    return ok({"plans": [_plan_dict(p) for p in plans], "stock": stock})
 
 
 @routes.post("/api/admin/plans")
 async def admin_create_plan(request: web.Request) -> web.Response:
-    await _require_admin(request)
-    body = await request.json()
+    _admin(request)
+    body = await _json_body(request)
     try:
         async with AsyncSessionLocal() as session:
             plan = await create_plan(
@@ -305,20 +421,21 @@ async def admin_create_plan(request: web.Request) -> web.Response:
             )
             await session.commit()
             await session.refresh(plan)
-    except ValueError as exc:
-        return _error(str(exc))
-    return _json({"ok": True, "plan": _plan_dict(plan)})
+    except (ValueError, TypeError) as exc:
+        return fail(str(exc), code="invalid_plan")
+    return ok({"plan": _plan_dict(plan)})
 
 
 @routes.post("/api/admin/plans/{plan_id}")
 async def admin_update_plan(request: web.Request) -> web.Response:
-    await _require_admin(request)
+    _admin(request)
     plan_id = request.match_info["plan_id"]
-    body = await request.json()
+    body = await _json_body(request)
+
     async with AsyncSessionLocal() as session:
         plan = await get_plan(session, plan_id)
         if not plan:
-            return _error("پلن پیدا نشد.", status=404)
+            return not_found("پلن پیدا نشد.")
         fields: dict[str, Any] = {}
         for key in ("name", "description"):
             if body.get(key) is not None:
@@ -328,26 +445,29 @@ async def admin_update_plan(request: web.Request) -> web.Response:
                 try:
                     fields[key] = int(body[key])
                 except (TypeError, ValueError):
-                    return _error("مقادیر عددی نامعتبرند.")
+                    return fail("مقادیر عددی نامعتبرند.", code="invalid_plan")
         if "devices" in fields and not 1 <= fields["devices"] <= 50:
-            return _error("تعداد دستگاه باید بین ۱ تا ۵۰ باشد.")
+            return fail("تعداد دستگاه باید بین ۱ تا ۵۰ باشد.", code="invalid_plan")
         if body.get("is_active") is not None:
             await set_plan_active(session, plan, bool(body["is_active"]))
         if fields:
             await update_plan_fields(session, plan, **fields)
-    return _json({"ok": True, "plan": _plan_dict(plan)})
+    return ok({"plan": _plan_dict(plan)})
 
 
 @routes.delete("/api/admin/plans/{plan_id}")
 async def admin_delete_plan(request: web.Request) -> web.Response:
-    await _require_admin(request)
+    _admin(request)
     plan_id = request.match_info["plan_id"]
     async with AsyncSessionLocal() as session:
         plan = await get_plan(session, plan_id)
         if not plan:
-            return _error("پلن پیدا نشد.", status=404)
-        await delete_plan(session, plan)
-    return _json({"ok": True})
+            return not_found("پلن پیدا نشد.")
+        try:
+            await delete_plan(session, plan)
+        except ValueError as exc:
+            return fail(str(exc), code="plan_in_use")
+    return ok({})
 
 
 # --- promo codes -----------------------------------------------------------
@@ -355,16 +475,16 @@ async def admin_delete_plan(request: web.Request) -> web.Response:
 
 @routes.get("/api/admin/promos")
 async def admin_promos(request: web.Request) -> web.Response:
-    await _require_admin(request)
+    _admin(request)
     async with AsyncSessionLocal() as session:
         promos = await list_promos(session)
-    return _json({"ok": True, "promos": [_promo_dict(p) for p in promos]})
+    return ok({"promos": [_promo_dict(p) for p in promos]})
 
 
 @routes.post("/api/admin/promos")
 async def admin_create_promo(request: web.Request) -> web.Response:
-    await _require_admin(request)
-    body = await request.json()
+    _admin(request)
+    body = await _json_body(request)
     try:
         async with AsyncSessionLocal() as session:
             promo = await create_promo(
@@ -373,46 +493,41 @@ async def admin_create_promo(request: web.Request) -> web.Response:
                 kind=(body.get("kind") or "days").strip(),
                 value=int(body.get("value") or 0),
                 max_uses=int(body.get("max_uses") or 0),
-                created_by=(await _admin_id(request)),
+                created_by=_admin(request),
             )
             await session.commit()
             await session.refresh(promo)
     except (ValueError, TypeError) as exc:
-        return _error(str(exc))
-    return _json({"ok": True, "promo": _promo_dict(promo)})
-
-
-async def _admin_id(request: web.Request) -> int:
-    user = request.get("telegram_user") or {}
-    return int(user.get("id") or 0)
+        return fail(str(exc), code="invalid_promo")
+    return ok({"promo": _promo_dict(promo)})
 
 
 @routes.post("/api/admin/promos/{promo_id}/toggle")
 async def admin_toggle_promo(request: web.Request) -> web.Response:
-    await _require_admin(request)
+    _admin(request)
     promo_id = int(request.match_info["promo_id"])
     async with AsyncSessionLocal() as session:
         promo = (
             await session.execute(select(PromoCode).where(PromoCode.id == promo_id))
         ).scalar_one_or_none()
         if not promo:
-            return _error("کد پرومو پیدا نشد.", status=404)
+            return not_found("کد پرومو پیدا نشد.")
         await set_promo_active(session, promo, not promo.is_active)
-    return _json({"ok": True, "promo": _promo_dict(promo)})
+    return ok({"promo": _promo_dict(promo)})
 
 
 @routes.delete("/api/admin/promos/{promo_id}")
 async def admin_delete_promo(request: web.Request) -> web.Response:
-    await _require_admin(request)
+    _admin(request)
     promo_id = int(request.match_info["promo_id"])
     async with AsyncSessionLocal() as session:
         promo = (
             await session.execute(select(PromoCode).where(PromoCode.id == promo_id))
         ).scalar_one_or_none()
         if not promo:
-            return _error("کد پرومو پیدا نشد.", status=404)
+            return not_found("کد پرومو پیدا نشد.")
         await delete_promo(session, promo)
-    return _json({"ok": True})
+    return ok({})
 
 
 # --- users -----------------------------------------------------------------
@@ -420,7 +535,7 @@ async def admin_delete_promo(request: web.Request) -> web.Response:
 
 @routes.get("/api/admin/users")
 async def admin_users(request: web.Request) -> web.Response:
-    await _require_admin(request)
+    _admin(request)
     query = (request.query.get("q") or "").strip()
     async with AsyncSessionLocal() as session:
         if query:
@@ -446,37 +561,26 @@ async def admin_users(request: web.Request) -> web.Response:
                         "referrals": summary.referrals,
                     }
                 )
-    return _json({"ok": True, "users": summaries})
+    return ok({"users": summaries})
 
 
 @routes.get("/api/admin/users/{user_id}")
 async def admin_user_detail(request: web.Request) -> web.Response:
-    await _require_admin(request)
+    _admin(request)
     user_id = int(request.match_info["user_id"])
     async with AsyncSessionLocal() as session:
         summary = await get_user_summary(session, user_id)
         if not summary:
-            return _error("کاربر پیدا نشد.", status=404)
+            return not_found("کاربر پیدا نشد.")
         result = await session.execute(
             select(Order)
             .where(Order.user_id == user_id)
             .order_by(Order.created_at.desc())
             .limit(20)
         )
-        orders = [
-            {
-                "id": o.id,
-                "price": o.price,
-                "status": o.status,
-                "days": o.days,
-                "traffic_gb": o.traffic_gb,
-                "created_at": o.created_at.strftime("%Y-%m-%d %H:%M"),
-            }
-            for o in result.scalars().all()
-        ]
-    return _json(
+        orders = [_order_dict(o) for o in result.scalars().all()]
+    return ok(
         {
-            "ok": True,
             "user": {
                 "id": summary.user.id,
                 "name": summary.display_name,
@@ -498,37 +602,36 @@ async def admin_user_detail(request: web.Request) -> web.Response:
 
 @routes.post("/api/admin/users/{user_id}/block")
 async def admin_block_user(request: web.Request) -> web.Response:
-    await _require_admin(request)
+    _admin(request)
     user_id = int(request.match_info["user_id"])
-    body = await request.json()
-    blocked = bool(body.get("blocked", True))
+    body = await _json_body(request)
     async with AsyncSessionLocal() as session:
-        user = await set_user_blocked(session, user_id, blocked)
+        user = await set_user_blocked(session, user_id, bool(body.get("blocked", True)))
         if not user:
-            return _error("کاربر پیدا نشد.", status=404)
-    return _json({"ok": True, "blocked": blocked})
+            return not_found("کاربر پیدا نشد.")
+    return ok({"blocked": bool(user.is_blocked)})
 
 
 @routes.post("/api/admin/users/{user_id}/credit")
 async def admin_credit_user(request: web.Request) -> web.Response:
-    await _require_admin(request)
+    _admin(request)
     user_id = int(request.match_info["user_id"])
-    body = await request.json()
+    body = await _json_body(request)
     try:
         amount = int(body.get("amount"))
     except (TypeError, ValueError):
-        return _error("مبلغ نامعتبر است.")
+        return fail("مبلغ نامعتبر است.", code="invalid_amount")
     if amount < 1:
-        return _error("مبلغ باید بزرگ‌تر از صفر باشد.")
+        return fail("مبلغ باید بزرگ‌تر از صفر باشد.", code="invalid_amount")
     async with AsyncSessionLocal() as session:
         balance = await credit_balance(session, user_id, amount)
         await session.commit()
-    return _json({"ok": True, "balance": balance})
+    return ok({"balance": balance})
 
 
 @routes.post("/api/admin/users/{user_id}/renew")
 async def admin_renew_user(request: web.Request) -> web.Response:
-    await _require_admin(request)
+    _admin(request)
     user_id = int(request.match_info["user_id"])
     async with AsyncSessionLocal() as session:
         account = (
@@ -540,7 +643,7 @@ async def admin_renew_user(request: web.Request) -> web.Response:
             )
         ).scalar_one_or_none()
         if not account:
-            return _error("اکانت فعالی برای این کاربر نیست.")
+            return fail("اکانت فعالی برای این کاربر نیست.", code="no_account")
 
         from app.services.renewal import extend_vpn_account
 
@@ -558,91 +661,230 @@ async def admin_renew_user(request: web.Request) -> web.Response:
         await extend_vpn_account(session, account, order)
         await session.commit()
         await session.refresh(account)
-    return _json({"ok": True, "expires_at": account.expires_at.strftime("%Y-%m-%d")})
+    return ok({"expires_at": account.expires_at.strftime("%Y-%m-%d")})
 
 
-# --- shop settings / broadcast / backup ------------------------------------
+# --- shop settings ---------------------------------------------------------
 
 
-@routes.post("/api/admin/maintenance")
-async def admin_maintenance(request: web.Request) -> web.Response:
-    await _require_admin(request)
-    body = await request.json()
+@routes.get("/api/admin/settings")
+async def admin_settings(request: web.Request) -> web.Response:
+    """Everything the shop settings screen needs."""
+    _admin(request)
     async with AsyncSessionLocal() as session:
-        row = await set_bot_settings(
-            session, maintenance_mode=bool(body.get("enabled"))
-        )
-    return _json({"ok": True, "maintenance": bool(row.maintenance_mode)})
+        from app.services.bot_settings import get_bot_settings
 
+        shop = await get_bot_settings(session)
+        panel = await get_panel_settings(session)
+        pricing = await get_pricing(session)
 
-@routes.post("/api/admin/trial")
-async def admin_trial_settings(request: web.Request) -> web.Response:
-    await _require_admin(request)
-    body = await request.json()
-    async with AsyncSessionLocal() as session:
-        row = await set_bot_settings(
-            session,
-            trial_enabled=body.get("enabled"),
-            trial_days=body.get("days"),
-            trial_gb=body.get("traffic_gb"),
-        )
-    return _json(
+    return ok(
         {
-            "ok": True,
+            "card_number": shop.card_number or "",
+            "card_holder": shop.card_holder or "",
+            "maintenance": bool(shop.maintenance_mode),
             "trial": {
-                "enabled": bool(row.trial_enabled),
-                "days": row.trial_days,
-                "traffic_gb": row.trial_gb,
+                "enabled": bool(shop.trial_enabled),
+                "days": shop.trial_days,
+                "traffic_gb": shop.trial_gb,
             },
+            "stars_rate": shop.stars_rate,
+            "pricing": pricing,
+            "panel": _panel_dict(panel),
         }
     )
 
 
-@routes.post("/api/admin/broadcast")
-async def admin_broadcast(request: web.Request) -> web.Response:
-    await _require_admin(request)
-    body = await request.json()
-    text = (body.get("text") or "").strip()
-    if not text:
-        return _error("متن پیام خالی است.")
-    use_html = bool(body.get("use_html"))
-    target = BROADCAST_TARGET_USER if body.get("user_id") else BROADCAST_TARGET_ALL
-    target_chat_id = body.get("user_id")
+@routes.post("/api/admin/settings")
+async def admin_update_settings(request: web.Request) -> web.Response:
+    """Update the card details, the trial, the Stars rate or maintenance."""
+    _admin(request)
+    body = await _json_body(request)
 
-    async with AsyncSessionLocal() as session:
-        broadcast = await create_broadcast(
-            session,
-            text,
-            use_html=use_html,
-            target=target,
-            target_chat_id=int(target_chat_id) if target_chat_id else None,
-            created_by=await _admin_id(request),
-        )
-    async with AsyncSessionLocal() as session:
-        result = await send_broadcast(request.app["bot"], session, broadcast)
-    return _json({"ok": True, "summary": result.summary, "sent": result.sent, "failed": result.failed})
-
-
-@routes.get("/api/admin/backup")
-async def admin_backup(request: web.Request) -> web.Response:
-    await _require_admin(request)
-    from app.services.backup import create_backup_bytes
+    from app.services.bot_settings import set_card_holder, set_card_number
 
     try:
-        payload = await create_backup_bytes()
-    except Exception as exc:
-        logger.error("Database backup failed: %s", exc)
-        return _error("پشتیبان‌گیری ناموفق بود.", status=500)
-    return web.Response(
-        body=payload,
-        headers={"Content-Disposition": 'attachment; filename="db-backup.sqlite3"'},
-        content_type="application/x-sqlite3",
+        card_number = optional_text(body, "card_number", maximum=64)
+        card_holder = optional_text(body, "card_holder", maximum=255)
+        maintenance = optional_bool(body, "maintenance")
+        trial_enabled = optional_bool(body, "trial_enabled")
+        trial_days = optional_int(body, "trial_days", minimum=0, maximum=365)
+        trial_gb = optional_int(body, "trial_gb", minimum=0, maximum=5000)
+        stars_rate = optional_int(body, "stars_rate", minimum=1, maximum=100000)
+        pricing = body.get("pricing") if isinstance(body.get("pricing"), dict) else {}
+        per_day = optional_int(pricing, "per_day", minimum=0, maximum=1000000)
+        per_gb = optional_int(pricing, "per_gb", minimum=0, maximum=1000000)
+    except FieldError as exc:
+        return fail(str(exc), code="invalid_settings")
+
+    async with AsyncSessionLocal() as session:
+        if card_number is not None:
+            await set_card_number(session, card_number)
+        if card_holder is not None:
+            await set_card_holder(session, card_holder)
+        await set_bot_settings(
+            session,
+            maintenance_mode=maintenance,
+            trial_enabled=trial_enabled,
+            trial_days=trial_days,
+            trial_gb=trial_gb,
+            stars_rate=stars_rate,
+        )
+        if per_day is not None or per_gb is not None:
+            await set_pricing(session, per_day=per_day, per_gb=per_gb)
+    return ok({})
+
+
+# --- 3x-ui panel -----------------------------------------------------------
+
+
+@routes.get("/api/admin/panel")
+async def admin_panel(request: web.Request) -> web.Response:
+    """The stored panel connection and the inbounds it offers."""
+    _admin(request)
+    async with AsyncSessionLocal() as session:
+        panel = await get_panel_settings(session)
+        stored = _panel_dict(panel)
+        inbounds: list[dict[str, Any]] = []
+        error = ""
+        if panel.panel_url and panel.panel_username:
+            try:
+                async with xui_client_for_panel(panel) as client:
+                    for inbound in await client.list_inbounds():
+                        inbounds.append(
+                            {
+                                "id": int(inbound.get("id") or 0),
+                                "remark": inbound.get("remark") or "",
+                                "protocol": inbound.get("protocol") or "",
+                                "enable": bool(inbound.get("enable")),
+                            }
+                        )
+            except Exception as exc:
+                error = str(exc)
+                logger.warning("Could not list the panel inbounds: %s", exc)
+
+    return ok({"panel": stored, "inbounds": inbounds, "error": error})
+
+
+@routes.post("/api/admin/panel")
+async def admin_update_panel(request: web.Request) -> web.Response:
+    """Store the panel connection."""
+    _admin(request)
+    body = await _json_body(request)
+    url = (body.get("url") or "").strip()
+    if url and not url.startswith("https://"):
+        return fail("آدرس پنل باید با https:// شروع شود.", code="invalid_url")
+
+    async with AsyncSessionLocal() as session:
+        panel = await update_panel_settings(
+            session,
+            panel_url=url or None,
+            panel_base_path=body.get("base_path"),
+            panel_username=body.get("username"),
+            panel_password=body.get("password"),
+            api_token=body.get("api_token"),
+            provisioning_mode=body.get("mode"),
+        )
+        stored = _panel_dict(panel)
+    return ok({"panel": stored})
+
+
+@routes.post("/api/admin/panel/test")
+async def admin_test_panel(request: web.Request) -> web.Response:
+    """Test the connection and read the subscription base from the panel."""
+    _admin(request)
+    async with AsyncSessionLocal() as session:
+        panel = await get_panel_settings(session)
+        if not panel.panel_url or not panel.panel_username:
+            return fail("پنل تنظیم نشده است.", code="not_configured")
+        try:
+            async with xui_client_for_panel(panel) as client:
+                summary = await client.test_connection()
+        except Exception as exc:
+            logger.warning("Panel test failed: %s", exc)
+            return fail(f"اتصال ناموفق بود: {exc}", status=502, code="panel_error")
+
+        sub_base = summary.get("subscription_base_url")
+        await update_panel_settings(
+            session,
+            subscription_base_url=sub_base,
+            is_verified=True,
+        )
+        panel = await get_panel_settings(session)
+        stored = _panel_dict(panel)
+
+    return ok(
+        {
+            "panel": stored,
+            "total_inbounds": summary.get("total_inbounds"),
+            "enabled_inbounds": summary.get("enabled_inbounds"),
+            "subscription_base_url": sub_base,
+        }
     )
+
+
+@routes.post("/api/admin/panel/inbounds")
+async def admin_set_inbounds(request: web.Request) -> web.Response:
+    """Choose the inbounds new clients are attached to."""
+    _admin(request)
+    body = await _json_body(request)
+    raw = body.get("inbound_ids")
+    if not isinstance(raw, list):
+        return fail("فهرست inbound نامعتبر است.", code="invalid_inbounds")
+    try:
+        ids = [int(x) for x in raw]
+    except (TypeError, ValueError):
+        return fail("فهرست inbound نامعتبر است.", code="invalid_inbounds")
+
+    async with AsyncSessionLocal() as session:
+        panel = await get_panel_settings(session)
+        set_selected_inbound_ids(panel, ids)
+        await session.commit()
+        selected = get_selected_inbound_ids(panel)
+    return ok({"selected_inbound_ids": selected})
+
+
+@routes.post("/api/admin/panel/token")
+async def admin_mint_panel_token(request: web.Request) -> web.Response:
+    """Mint a fresh API token for the bot and store it."""
+    _admin(request)
+    async with AsyncSessionLocal() as session:
+        panel = await get_panel_settings(session)
+        if not panel.panel_url or not panel.panel_username:
+            return fail("پنل تنظیم نشده است.", code="not_configured")
+        password = get_panel_password(panel)
+        if not password:
+            return fail("رمز پنل برای ساخت توکن لازم است.", code="no_password")
+
+        from app.xui.client import XUIClient
+
+        # The panel refuses a duplicate token name, so every mint gets its own
+        # name — the button always works.
+        token_name = f"miniapp-{int(time.time())}"
+        try:
+            async with XUIClient(
+                panel.panel_url,
+                panel.panel_username,
+                password,
+                base_path=panel.panel_base_path or "",
+            ) as client:
+                token = await client.create_api_token(token_name)
+        except Exception as exc:
+            logger.error("Could not mint a panel token: %s", exc)
+            return fail(f"ساخت توکن ناموفق بود: {exc}", status=502, code="panel_error")
+
+        set_panel_api_token(panel, token)
+        await session.commit()
+
+    return ok({"has_token": True})
+
+
+# --- inventory, broadcast, backup -----------------------------------------
 
 
 @routes.get("/api/admin/inventory")
 async def admin_inventory(request: web.Request) -> web.Response:
-    await _require_admin(request)
+    _admin(request)
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(PlanConfig).order_by(PlanConfig.created_at.desc()).limit(100)
@@ -657,23 +899,74 @@ async def admin_inventory(request: web.Request) -> web.Response:
             }
             for c in result.scalars().all()
         ]
-    return _json({"ok": True, "entries": entries})
+    return ok({"entries": entries})
 
 
 @routes.post("/api/admin/inventory")
 async def admin_add_inventory(request: web.Request) -> web.Response:
-    await _require_admin(request)
-    body = await request.json()
+    _admin(request)
+    body = await _json_body(request)
     plan_id = (body.get("plan_id") or "").strip()
     config_text = (body.get("config_text") or "").strip()
     if not plan_id or not config_text:
-        return _error("پلن و متن کانفیگ لازم است.")
+        return fail("پلن و متن کانفیگ لازم است.", code="invalid_config")
+    if not is_valid_config_text(config_text):
+        return fail(
+            "متن کانفیگ معتبر نیست. یک لینک اشتراک یا کانفیگ معتبر بفرستید.",
+            code="invalid_config",
+        )
     async with AsyncSessionLocal() as session:
         plan = await get_plan(session, plan_id)
         if not plan:
-            return _error("پلن پیدا نشد.", status=404)
-        entry = await add_config(
-            session, plan_id, config_text, await _admin_id(request)
-        )
+            return not_found("پلن پیدا نشد.")
+        entry = await add_config(session, plan_id, config_text, _admin(request))
         available = await count_available(session, plan_id)
-    return _json({"ok": True, "id": entry.id, "available": available})
+    return ok({"id": entry.id, "available": available})
+
+
+@routes.post("/api/admin/broadcast")
+async def admin_broadcast(request: web.Request) -> web.Response:
+    _admin(request)
+    body = await _json_body(request)
+    text = (body.get("text") or "").strip()
+    if not text:
+        return fail("متن پیام خالی است.", code="empty_text")
+    use_html = bool(body.get("use_html"))
+    target = BROADCAST_TARGET_USER if body.get("user_id") else BROADCAST_TARGET_ALL
+    target_chat_id = body.get("user_id")
+
+    async with AsyncSessionLocal() as session:
+        broadcast = await create_broadcast(
+            session,
+            text,
+            use_html=use_html,
+            target=target,
+            target_chat_id=int(target_chat_id) if target_chat_id else None,
+            created_by=_admin(request),
+        )
+    async with AsyncSessionLocal() as session:
+        result = await send_broadcast(request.app["bot"], session, broadcast)
+    return ok(
+        {
+            "summary": result.summary,
+            "sent": result.sent,
+            "failed": result.failed,
+        }
+    )
+
+
+@routes.get("/api/admin/backup")
+async def admin_backup(request: web.Request) -> web.Response:
+    _admin(request)
+    from app.services.backup import create_backup_bytes
+
+    try:
+        payload = await create_backup_bytes()
+    except Exception as exc:
+        logger.error("Database backup failed: %s", exc)
+        return fail("پشتیبان‌گیری ناموفق بود.", status=500, code="backup_failed")
+    return web.Response(
+        body=payload,
+        headers={"Content-Disposition": 'attachment; filename="db-backup.sqlite3"'},
+        content_type="application/x-sqlite3",
+    )

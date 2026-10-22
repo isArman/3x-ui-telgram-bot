@@ -77,29 +77,6 @@ async def create_broadcast(
     return broadcast
 
 
-async def list_broadcasts(session: AsyncSession, limit: int = 10) -> list[Broadcast]:
-    result = await session.execute(
-        select(Broadcast).order_by(Broadcast.created_at.desc()).limit(limit)
-    )
-    return list(result.scalars().all())
-
-
-async def get_broadcast(
-    session: AsyncSession, broadcast_id: int
-) -> Broadcast | None:
-    result = await session.execute(
-        select(Broadcast).where(Broadcast.id == broadcast_id)
-    )
-    return result.scalar_one_or_none()
-
-
-async def last_broadcast(session: AsyncSession) -> Broadcast | None:
-    result = await session.execute(
-        select(Broadcast).order_by(Broadcast.created_at.desc()).limit(1)
-    )
-    return result.scalar_one_or_none()
-
-
 def _parse_mode(use_html: bool) -> str | None:
     return "HTML" if use_html else None
 
@@ -205,51 +182,3 @@ async def send_broadcast(
         result.total,
     )
     return result
-
-
-async def edit_last_broadcast(
-    bot: Bot,
-    session: AsyncSession,
-    text: str,
-    *,
-    use_html: bool = False,
-) -> int:
-    """
-    Edit the messages of the most recent broadcast.
-
-    Returns the number of messages that were edited.
-    """
-    broadcast = await last_broadcast(session)
-    if not broadcast:
-        return 0
-
-    result = await session.execute(
-        select(BroadcastMessage).where(BroadcastMessage.broadcast_id == broadcast.id)
-    )
-    rows = list(result.scalars().all())
-
-    parse_mode = _parse_mode(use_html)
-    edited = 0
-    for row in rows:
-        try:
-            await bot.edit_message_text(
-                chat_id=row.chat_id,
-                message_id=row.message_id,
-                text=text,
-                parse_mode=parse_mode,
-            )
-            edited += 1
-        except Exception as exc:
-            logger.warning(
-                "Could not edit broadcast message %s in chat %s: %s",
-                row.message_id,
-                row.chat_id,
-                exc,
-            )
-
-    if edited:
-        broadcast.text = text
-        broadcast.use_html = use_html
-        await session.commit()
-
-    return edited

@@ -120,18 +120,10 @@ def get_selected_inbound_ids(settings: PanelSettings) -> List[int]:
 
 
 def set_selected_inbound_ids(settings: PanelSettings, inbound_ids: List[int]) -> List[int]:
+    """Replace the whole inbound selection."""
     cleaned = sorted({int(x) for x in inbound_ids})
     settings.selected_inbound_ids = json.dumps(cleaned)
     return cleaned
-
-
-def toggle_inbound_id(settings: PanelSettings, inbound_id: int) -> List[int]:
-    current = set(get_selected_inbound_ids(settings))
-    if inbound_id in current:
-        current.remove(inbound_id)
-    else:
-        current.add(inbound_id)
-    return set_selected_inbound_ids(settings, sorted(current))
 
 
 def prune_selected_inbound_ids(
@@ -156,6 +148,41 @@ def is_auto_provisioning_ready(settings: PanelSettings) -> bool:
 
 
 @asynccontextmanager
+async def update_panel_settings(
+    session: AsyncSession,
+    *,
+    panel_url: str | None = None,
+    panel_base_path: str | None = None,
+    panel_username: str | None = None,
+    panel_password: str | None = None,
+    api_token: str | None = None,
+    subscription_base_url: str | None = None,
+    provisioning_mode: str | None = None,
+    is_verified: bool | None = None,
+) -> PanelSettings:
+    """Update the stored panel connection. Empty values are ignored."""
+    settings = await get_panel_settings(session)
+    if panel_url is not None:
+        settings.panel_url = panel_url.strip().rstrip("/")
+    if panel_base_path is not None:
+        settings.panel_base_path = panel_base_path.strip()
+    if panel_username is not None:
+        settings.panel_username = panel_username.strip()
+    if panel_password:
+        set_panel_password(settings, panel_password)
+    if api_token is not None:
+        set_panel_api_token(settings, api_token)
+    if subscription_base_url is not None:
+        settings.subscription_base_url = subscription_base_url.strip()
+    if provisioning_mode is not None:
+        settings.provisioning_mode = provisioning_mode
+    if is_verified is not None:
+        settings.is_verified = bool(is_verified)
+    await session.commit()
+    await session.refresh(settings)
+    return settings
+
+
 async def xui_client_for_panel(settings: PanelSettings) -> AsyncIterator:
     """Open an authenticated XUIClient from stored panel settings.
 
@@ -172,5 +199,6 @@ async def xui_client_for_panel(settings: PanelSettings) -> AsyncIterator:
         settings.panel_username,
         get_panel_password(settings),
         api_token=get_panel_api_token(settings),
+        base_path=settings.panel_base_path or "",
     ) as client:
         yield client

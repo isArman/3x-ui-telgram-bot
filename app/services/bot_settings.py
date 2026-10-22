@@ -80,9 +80,3 @@ async def set_bot_settings(
     await session.commit()
     await session.refresh(row)
     return row
-
-
-async def is_maintenance(session: AsyncSession) -> bool:
-    """True while the shop is closed for maintenance."""
-    row = await get_bot_settings(session)
-    return bool(row.maintenance_mode)

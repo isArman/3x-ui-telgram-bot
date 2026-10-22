@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# Update the shop on the server.
+#
+# The pip layer is the expensive part of the image, so the build keeps the
+# Docker cache: requirements.txt stays stable and optional packages live in
+# requirements-extra.txt. Never build with --no-cache on the small server.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -17,13 +22,13 @@ if [ ! -f app/config/plans.yaml ]; then
 fi
 
 echo "==> Pulling latest code..."
-git pull
+git pull --ff-only
 
-echo "==> Rebuilding and restarting bot..."
-docker compose down
-docker compose build --no-cache bot
+echo "==> Rebuilding and restarting the bot..."
+# The server has 1 CPU and little RAM: build as nicely as possible.
+nice -n 19 ionice -c3 docker compose build bot
 docker compose up -d --force-recreate bot
 
-echo "==> Recent logs (check for 'Admin IDs loaded'):"
+echo "==> Recent logs:"
 sleep 3
 docker compose logs --tail=40 bot

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import Order, PromoCode
@@ -59,16 +59,6 @@ async def list_promos(session: AsyncSession) -> list[PromoCode]:
     return list(result.scalars().all())
 
 
-async def promo_usage_count(session: AsyncSession) -> dict[str, int]:
-    """How many times each code was reserved (from the orders)."""
-    result = await session.execute(
-        select(Order.promo_code, func.count(Order.id))
-        .where(Order.promo_code.isnot(None), Order.status.in_(_RESERVED_STATUSES))
-        .group_by(Order.promo_code)
-    )
-    return {row[0]: int(row[1]) for row in result.all()}
-
-
 async def validate_promo(
     session: AsyncSession,
     code: str,
@@ -93,9 +83,10 @@ async def validate_promo(
     if promo.expires_at and promo.expires_at <= datetime.utcnow():
         return None, "مهلت این کد پرومو تمام شده است."
 
-    reserved = await promo_usage_count(session)
-    already_used = reserved.get(promo.code, 0)
-    if promo.max_uses and already_used >= promo.max_uses:
+    # ``used_count`` is the single source of truth: it is incremented with a
+    # conditional update when the order is created, so two parallel orders can
+    # never redeem a code that only had one use left.
+    if promo.max_uses and int(promo.used_count or 0) >= promo.max_uses:
         return None, "ظرفیت این کد پرومو تکمیل شده است."
 
     # One code per customer: a code already used on a live order cannot be reused.
@@ -148,10 +139,24 @@ async def validate_promo(
 async def reserve_promo(
     session: AsyncSession,
     promo: PromoCode,
-) -> None:
-    """Count a redemption. Called when the order is created."""
-    promo.used_count = int(promo.used_count or 0) + 1
-    await session.flush()
+) -> bool:
+    """
+    Claim one redemption of a code.
+
+    The counter is raised with a conditional update, so a code with one use
+    left can never be redeemed twice. Returns False when the code is full.
+    """
+    claimed = await session.execute(
+        update(PromoCode)
+        .where(
+            PromoCode.id == promo.id,
+            PromoCode.is_active.is_(True),
+            (PromoCode.max_uses == 0) | (PromoCode.used_count < PromoCode.max_uses),
+        )
+        .values(used_count=PromoCode.used_count + 1)
+        .execution_options(synchronize_session=False)
+    )
+    return claimed.rowcount == 1
 
 
 async def create_promo(
@@ -201,16 +206,3 @@ async def set_promo_active(
 async def delete_promo(session: AsyncSession, promo: PromoCode) -> None:
     await session.delete(promo)
     await session.commit()
-
-
-def describe_promo(promo: PromoCode) -> str:
-    """One-line human description used in the admin list."""
-    if promo.kind == PROMO_KIND_PERCENT:
-        effect = f"{promo.value}٪ تخفیف"
-    elif promo.kind == PROMO_KIND_DAYS:
-        effect = f"{promo.value} روز اضافه"
-    else:
-        effect = f"{promo.value} گیگابایت اضافه"
-    limit = "نامحدود" if not promo.max_uses else f"حداکثر {promo.max_uses} بار"
-    state = "فعال" if promo.is_active else "غیرفعال"
-    return f"{promo.code} — {effect} ({limit}) — {state}"

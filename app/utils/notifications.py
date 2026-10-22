@@ -1,8 +1,7 @@
 """Periodic expiry and low-traffic alerts.
 
-Both alerts are actionable: the message carries a "تمدید اکانت" button wired
-to the normal renewal flow (callback `renew_account:<id>`), so a user can
-renew straight from the alert.
+The alerts point the customer at the Mini App, where renewal and the traffic
+figures live.
 """
 
 from datetime import datetime, timedelta
@@ -11,7 +10,7 @@ from aiogram import Bot
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.bot.keyboards.user import usage_alert_keyboard
+from app.config.settings import settings
 from app.database.models import VPNAccount
 from app.services.panel_settings import (
     get_panel_settings,
@@ -28,6 +27,12 @@ from app.utils.logger import logger
 
 # Alert when this many days (or fewer) remain before expiry.
 EXPIRY_WARNING_DAYS = 3
+
+
+def _mini_app_hint() -> str:
+    if not settings.MINIAPP_URL:
+        return ""
+    return f"\n\nبرای تمدید در Mini App: {settings.MINIAPP_URL}"
 
 
 async def check_expiring_accounts(session: AsyncSession, bot: Bot) -> int:
@@ -62,15 +67,11 @@ async def check_expiring_accounts(session: AsyncSession, bot: Bot) -> int:
                 f"{lead}\n\n"
                 f"شماره سفارش: #{account.order_id}\n"
                 f"تاریخ انقضا: {account.expires_at.strftime('%Y-%m-%d')}\n"
-                f"حجم: {account.traffic_limit_gb} گیگابایت\n\n"
-                "با دکمه زیر می‌توانید همین‌جا تمدید کنید."
+                f"حجم: {account.traffic_limit_gb} گیگابایت"
+                + _mini_app_hint()
             )
 
-            await bot.send_message(
-                chat_id=account.user_id,
-                text=message,
-                reply_markup=usage_alert_keyboard(account.id),
-            )
+            await bot.send_message(chat_id=account.user_id, text=message)
 
             account.expiry_notified = True
             notified_count += 1
@@ -149,15 +150,11 @@ async def check_low_traffic_accounts(session: AsyncSession, bot: Bot) -> int:
                     f"حجم کل: {format_gb(total_bytes)} GB\n"
                     f"مصرف شده: {format_gb(used)} GB\n"
                     f"باقی‌مانده: {format_gb(remaining_bytes)} GB "
-                    f"(حدود {remaining_pct:.0f}٪)\n\n"
-                    "با دکمه زیر می‌توانید همین‌جا تمدید کنید."
+                    f"(حدود {remaining_pct:.0f}٪)"
+                    + _mini_app_hint()
                 )
 
-                await bot.send_message(
-                    chat_id=account.user_id,
-                    text=message,
-                    reply_markup=usage_alert_keyboard(account.id),
-                )
+                await bot.send_message(chat_id=account.user_id, text=message)
                 account.traffic_low_notified = True
                 notified_count += 1
 

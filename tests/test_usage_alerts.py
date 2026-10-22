@@ -1,11 +1,10 @@
-"""Actionable usage/expiry alerts and renew-from-alert flow."""
+"""Expiry and low-traffic alerts point the customer at the Mini App."""
 
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.bot.keyboards.user import usage_alert_keyboard
 from app.database.models import Order, User, VPNAccount
 from app.database.session import AsyncSessionLocal, init_db
 from app.services.renewal import extend_vpn_account
@@ -13,52 +12,47 @@ from app.services.traffic_usage import GB
 from app.utils.notifications import EXPIRY_WARNING_DAYS, check_expiring_accounts
 
 
-def _renew_callback_of(kb) -> str:
-    return kb.inline_keyboard[0][0].callback_data
-
-
-def test_alert_keyboard_wires_to_renew_flow():
-    kb = usage_alert_keyboard(77)
-    assert _renew_callback_of(kb) == "renew_account:77"
-    assert kb.inline_keyboard[0][0].text == "تمدید اکانت"
-
-
 @pytest.mark.asyncio
-async def test_expiry_alert_is_actionable_and_once():
+async def test_expiry_alert_is_sent_once():
     await init_db()
     bot_mock = AsyncMock()
 
     async with AsyncSessionLocal() as session:
-        session.add(User(id=700700, username="alert_user"))
+        session.add(User(id=880101, username="expiring_test"))
         await session.flush()
         order = Order(
-            user_id=700700, days=30, traffic_gb=10, price=100000, status="completed"
+            user_id=880101,
+            days=30,
+            traffic_gb=40,
+            price=150000,
+            status="completed",
         )
         session.add(order)
         await session.flush()
-        account = VPNAccount(
+        vpn_account = VPNAccount(
             order_id=order.id,
-            user_id=700700,
+            user_id=880101,
             config_ref="xui-auto",
             subscription_path="https://test.com/sub",
-            expires_at=datetime.utcnow() + timedelta(days=1),
-            traffic_limit_gb=10,
+            expires_at=datetime.utcnow() + timedelta(days=2),
+            traffic_limit_gb=40,
             is_active=True,
             expiry_notified=False,
         )
-        session.add(account)
+        session.add(vpn_account)
         await session.commit()
-        account_id = account.id
 
-        notified = await check_expiring_accounts(session, bot_mock)
-        assert notified == 1
+        assert await check_expiring_accounts(session, bot_mock) == 1
+        bot_mock.send_message.assert_called_once()
 
-        # the alert carries a working renew button for exactly this account
-        _, kwargs = bot_mock.send_message.call_args
-        kb = kwargs["reply_markup"]
-        assert _renew_callback_of(kb) == f"renew_account:{account_id}"
+        # the alert points at the Mini App, where the renewal lives
+        text = bot_mock.send_message.call_args.kwargs["text"]
+        assert "Mini App" in text
 
-        # second run does not re-alert
+        await session.refresh(vpn_account)
+        assert vpn_account.expiry_notified is True
+
+        # a second run does not re-alert
         assert await check_expiring_accounts(session, bot_mock) == 0
 
 
@@ -68,22 +62,25 @@ async def test_alert_window_is_three_days():
     bot_mock = AsyncMock()
 
     async with AsyncSessionLocal() as session:
-        session.add(User(id=700701, username="far_user"))
+        session.add(User(id=880102, username="far_user"))
         await session.flush()
         order = Order(
-            user_id=700701, days=30, traffic_gb=10, price=100000, status="completed"
+            user_id=880102,
+            days=30,
+            traffic_gb=40,
+            price=150000,
+            status="completed",
         )
         session.add(order)
         await session.flush()
-        # well outside the window -> no alert
         session.add(
             VPNAccount(
                 order_id=order.id,
-                user_id=700701,
+                user_id=880102,
                 config_ref="xui-auto",
                 subscription_path="https://test.com/sub",
                 expires_at=datetime.utcnow() + timedelta(days=EXPIRY_WARNING_DAYS + 5),
-                traffic_limit_gb=10,
+                traffic_limit_gb=40,
                 is_active=True,
                 expiry_notified=False,
             )
@@ -100,16 +97,20 @@ async def test_renewal_resets_alert_flags():
     await init_db()
 
     async with AsyncSessionLocal() as session:
-        session.add(User(id=700702, username="renew_user"))
+        session.add(User(id=880103, username="renew_user"))
         await session.flush()
         order = Order(
-            user_id=700702, days=30, traffic_gb=10, price=100000, status="completed"
+            user_id=880103,
+            days=30,
+            traffic_gb=10,
+            price=100000,
+            status="completed",
         )
         session.add(order)
         await session.flush()
         account = VPNAccount(
             order_id=order.id,
-            user_id=700702,
+            user_id=880103,
             config_ref="xui-auto",
             subscription_path="https://test.com/sub",
             expires_at=datetime.utcnow() + timedelta(days=1),
@@ -122,7 +123,7 @@ async def test_renewal_resets_alert_flags():
         await session.commit()
 
         renew_order = Order(
-            user_id=700702,
+            user_id=880103,
             days=30,
             traffic_gb=20,
             price=100000,
@@ -146,13 +147,13 @@ async def test_renewal_resets_alert_flags():
 @pytest.mark.asyncio
 @patch("app.utils.notifications.is_auto_provisioning_ready", return_value=True)
 @patch("app.utils.notifications.xui_client_for_panel")
-async def test_low_traffic_alert_is_actionable(mock_xui_ctx, _mock_ready):
+async def test_low_traffic_alert_uses_the_panel_list(mock_xui_ctx, _mock_ready):
     await init_db()
     bot_mock = AsyncMock()
     panel_client = AsyncMock()
     panel_client.list_clients.return_value = [
         {
-            "email": "700703",
+            "email": "880104",
             "totalGB": 10 * GB,
             "traffic": {"up": int(9.1 * GB), "down": 0},
         }
@@ -170,16 +171,16 @@ async def test_low_traffic_alert_is_actionable(mock_xui_ctx, _mock_ready):
     from app.utils.notifications import check_low_traffic_accounts
 
     async with AsyncSessionLocal() as session:
-        session.add(User(id=700703, username="low_user"))
+        session.add(User(id=880104, username="low_user"))
         await session.flush()
         order = Order(
-            user_id=700703, days=30, traffic_gb=10, price=100000, status="completed"
+            user_id=880104, days=30, traffic_gb=10, price=100000, status="completed"
         )
         session.add(order)
         await session.flush()
         account = VPNAccount(
             order_id=order.id,
-            user_id=700703,
+            user_id=880104,
             config_ref="xui-auto",
             subscription_path="https://test.com/sub",
             expires_at=datetime.utcnow() + timedelta(days=30),
@@ -189,9 +190,8 @@ async def test_low_traffic_alert_is_actionable(mock_xui_ctx, _mock_ready):
         )
         session.add(account)
         await session.commit()
-        account_id = account.id
 
         notified = await check_low_traffic_accounts(session, bot_mock)
         assert notified == 1
-        _, kwargs = bot_mock.send_message.call_args
-        assert _renew_callback_of(kwargs["reply_markup"]) == f"renew_account:{account_id}"
+        text = bot_mock.send_message.call_args.kwargs["text"]
+        assert "Mini App" in text

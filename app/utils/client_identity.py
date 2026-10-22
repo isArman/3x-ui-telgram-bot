@@ -1,6 +1,4 @@
 import re
-from typing import Optional
-
 from app.database.models import User
 
 

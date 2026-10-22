@@ -87,16 +87,6 @@ def parse_user(data: dict[str, Any]) -> Optional[dict[str, Any]]:
     }
 
 
-def user_id_from_init_data(init_data: str, bot_token: str) -> Optional[int]:
-    """Convenience: the validated Telegram user id, or None."""
-    try:
-        data = validate_init_data(init_data, bot_token)
-    except WebAuthError:
-        return None
-    user = parse_user(data)
-    return user["id"] if user else None
-
-
 def _as_int(value: Any) -> int:
     try:
         return int(value)

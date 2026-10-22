@@ -14,6 +14,7 @@ from app.services.xui_provisioning import (
     ProvisionResult,
     provision_subscription_detailed,
 )
+from app.utils.logger import logger
 
 GB = 1024**3
 AUTO_CONFIG_REF = "xui-auto"
@@ -124,13 +125,23 @@ async def _try_auto_provision(
     order: Order,
     user: User,
     vpn_account: VPNAccount | None = None,
-) -> ProvisionResult | None:
+) -> tuple[ProvisionResult | None, str]:
+    """
+    Try to provision the order on the panel.
+
+    Returns ``(result, error)``. The error is only set when the panel was
+    actually used and the write failed — that is different from a shop that
+    runs in manual mode and never touches the panel at all.
+    """
     panel = await get_panel_settings(session)
     if not is_auto_provisioning_ready(panel):
-        return None
-    return await provision_subscription_detailed(
+        return None, ""
+    result = await provision_subscription_detailed(
         session, panel, user, order, existing_account=vpn_account
     )
+    if result is None:
+        return None, "panel write failed"
+    return result, ""
 
 
 async def complete_payment_approval(
@@ -144,7 +155,10 @@ async def complete_payment_approval(
     provision: ProvisionResult | None = None,
 ) -> tuple[int, int] | None:
     """Complete new-order payment. Returns referral cashback (referrer_id, amount) if any."""
-    from app.services.referral import grant_referral_cashback
+    from app.services.referral import (
+        grant_referral_cashback,
+        grant_referral_cashback_level2,
+    )
 
     payment.status = "approved"
     payment.reviewed_at = datetime.utcnow()
@@ -191,6 +205,7 @@ async def complete_payment_approval(
         )
         session.add(vpn_account)
     cashback = await grant_referral_cashback(session, order)
+    await grant_referral_cashback_level2(session, order)
     await session.commit()
     return cashback
 
@@ -247,7 +262,9 @@ async def fulfill_paid_order(
         if not vpn_account or vpn_account.user_id != order.user_id:
             raise ValueError("renewal vpn account not found")
 
-        sub_url = await _try_auto_provision(session, order, user, vpn_account)
+        sub_url, panel_error = await _try_auto_provision(
+            session, order, user, vpn_account
+        )
         if sub_url:
             vpn_account = await complete_renewal_approval(
                 session, payment, order, reviewer_id, vpn_account, sub_url.subscription_url,
@@ -260,6 +277,16 @@ async def fulfill_paid_order(
                 plan_name=plan_name,
             )
 
+        if panel_error:
+            # The customer paid, but the panel write failed. Extending only the
+            # database row would tell the customer the renewal worked while the
+            # panel still runs the old quota and expiry — so it goes to the
+            # admins instead.
+            logger.error(
+                "Renewal of order %s could not be written to the panel", order.id
+            )
+            return FulfillResult(kind="needs_manual", plan_name=plan_name)
+
         vpn_account = await complete_renewal_approval(
             session, payment, order, reviewer_id, vpn_account, None
         )
@@ -271,7 +298,7 @@ async def fulfill_paid_order(
         )
 
     # New account — auto 3x-ui
-    sub_url = await _try_auto_provision(session, order, user)
+    sub_url, _panel_error = await _try_auto_provision(session, order, user)
     if sub_url:
         cashback = await complete_payment_approval(
             session,
