@@ -236,6 +236,18 @@ XUI_VERIFY_SSL=true     # false فقط برای پنل self-signed در dev
 python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
+> **تغییر `SECRET_KEY`:** کلید رمزنگاری از `SECRET_KEY` مشتق می‌شود، پس با عوض کردن آن
+> پسورد ذخیره‌شده پنل دیگر خوانده نمی‌شود. بعد از تغییر کلید، پسورد ذخیره‌شده را با
+> همان کلید جدید دوباره رمزنگاری کنید:
+>
+> ```bash
+> OLD_SECRET_KEY=<کلید قبلی> docker compose run --rm bot python scripts/rotate_secret_key.py
+> ```
+>
+> اگر `SECRET_KEY` اصلاً تنظیم نشده بود، کلید از `BOT_TOKEN` مشتق می‌شد؛ اسکریپت
+> این حالت را هم تشخیص می‌دهد. بدون این مرحله باید از داخل ربات دوباره «تنظیم اتصال پنل»
+> را انجام دهید.
+
 ### داده‌های ذخیره‌شده
 
 | داده | محل | توضیح |
