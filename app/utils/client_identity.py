@@ -23,6 +23,19 @@ def panel_client_email(user: User) -> str:
     return "unknown"
 
 
+def panel_client_email_for_order(user: User, order_id: int) -> str:
+    """
+    Per-order panel client email: every order gets its own subscription.
+
+    The old scheme (one client per user, extended on every purchase) accumulated
+    quota/expiry across orders and delivered subscriptions that did not match
+    the purchased plan. A unique email per order guarantees a fresh client with
+    exactly the plan's limits.
+    """
+    base = panel_client_email(user)
+    return f"{base}_{order_id}"
+
+
 def build_client_comment(user: User) -> str:
     """Panel client comment — Telegram profile only (no order/config details)."""
     parts = [f"id={user.id}"]

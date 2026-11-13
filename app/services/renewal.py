@@ -1,4 +1,4 @@
-"""VPN account renewal logic."""
+"""VPN account renewal logic (reset semantics)."""
 
 from __future__ import annotations
 
@@ -9,11 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.models import Order, VPNAccount
 
 
-def compute_extended_expiry(current_expires_at: datetime, extra_days: int) -> datetime:
-    """Add days to expiry; if already expired, extend from now."""
-    now = datetime.utcnow()
-    base = current_expires_at if current_expires_at > now else now
-    return base + timedelta(days=extra_days)
+def compute_reset_expiry(days: int) -> datetime:
+    """Fresh expiry from now — a renewal never carries leftover time."""
+    return datetime.utcnow() + timedelta(days=days)
 
 
 async def extend_vpn_account(
@@ -22,9 +20,16 @@ async def extend_vpn_account(
     order: Order,
     subscription_url: str | None = None,
 ) -> VPNAccount:
-    """Extend an existing VPN account after renewal payment approval."""
-    vpn_account.expires_at = compute_extended_expiry(vpn_account.expires_at, order.days)
-    vpn_account.traffic_limit_gb += order.traffic_gb
+    """
+    Reset an existing VPN account to the order's plan (admin gift flow).
+
+    The new plan replaces the old subscription entirely: expiry restarts from
+    now and traffic is reset to the plan's allowance. A traffic of 0 means
+    "leave the traffic allowance unchanged" (admin gift only sets days).
+    """
+    vpn_account.expires_at = compute_reset_expiry(order.days)
+    if order.traffic_gb > 0:
+        vpn_account.traffic_limit_gb = order.traffic_gb
     if subscription_url:
         vpn_account.subscription_path = subscription_url
     vpn_account.is_active = True

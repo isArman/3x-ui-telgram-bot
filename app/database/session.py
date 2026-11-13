@@ -155,6 +155,10 @@ async def _migrate_sqlite_columns(conn):
                 "ADD COLUMN traffic_low_notified BOOLEAN DEFAULT 0"
             )
         )
+    if "panel_email" not in vpn_cols:
+        await conn.execute(
+            text("ALTER TABLE vpn_accounts ADD COLUMN panel_email VARCHAR(255)")
+        )
 
 
 async def _backfill_referral_codes(conn):

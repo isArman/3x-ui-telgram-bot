@@ -162,6 +162,16 @@ def prepare_client_update_payload(
     if limit_ip is not None:
         payload["limitIp"] = int(limit_ip)
 
+    # The update endpoint expects allowedIPs as an array of strings while the
+    # stored record carries it as a comma-separated string (and forwardedPorts
+    # the other way around).
+    allowed = payload.get("allowedIPs")
+    if isinstance(allowed, str):
+        payload["allowedIPs"] = [p.strip() for p in allowed.split(",") if p.strip()]
+    ports = payload.get("forwardedPorts")
+    if isinstance(ports, list):
+        payload["forwardedPorts"] = ",".join(str(p) for p in ports)
+
     return payload
 
 

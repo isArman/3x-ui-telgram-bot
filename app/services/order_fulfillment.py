@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.models import Order, Payment, PlanConfig, User, VPNAccount
 from app.services.config_inventory import assign_config
 from app.services.panel_settings import get_panel_settings, is_auto_provisioning_ready
-from app.services.renewal import extend_vpn_account
+from app.services.renewal import extend_vpn_account  # noqa: F401  (kept for admin gift flow)
 from app.services.xui_provisioning import (
     ProvisionResult,
     provision_subscription_detailed,
@@ -74,48 +74,21 @@ def _expiry_from_ms(expiry_ms: int) -> datetime | None:
     return datetime.fromtimestamp(expiry_ms / 1000, tz=timezone.utc).replace(tzinfo=None)
 
 
-async def _upsert_auto_account(
+async def _create_auto_account(
     session: AsyncSession,
     order: Order,
     subscription_url: str,
     provision: ProvisionResult | None,
 ) -> VPNAccount:
     """
-    Keep exactly one database row per user for panel-backed accounts.
+    Insert one VPNAccount row per order.
 
-    The 3x-ui panel keeps a single client per Telegram user and *extends* it on
-    every repeat purchase, so inserting a new row per order would leave stale
-    rows behind: duplicated expiry alerts and a renewal that extends a row the
-    panel client no longer matches. The panel owns the quota/expiry, so the row
-    mirrors the panel instead of recomputing it.
+    Every order owns a separate panel client and a separate subscription, so
+    the row mirrors the panel state of that order only.
     """
     expires_at = _expiry_from_ms(provision.expiry_ms) if provision else None
     if expires_at is None:
         expires_at = datetime.utcnow() + timedelta(days=order.days)
-
-    result = await session.execute(
-        select(VPNAccount)
-        .where(
-            VPNAccount.user_id == order.user_id,
-            VPNAccount.config_ref == AUTO_CONFIG_REF,
-        )
-        .order_by(VPNAccount.created_at.desc())
-        .limit(1)
-    )
-    account = result.scalar_one_or_none()
-
-    if account is not None:
-        account.subscription_path = subscription_url
-        account.expires_at = expires_at
-        if provision and provision.total_bytes > 0:
-            account.traffic_limit_gb = provision.total_bytes // GB
-        account.is_active = True
-        account.expiry_notified = False
-        account.traffic_low_notified = False
-        account.last_renewed_at = datetime.utcnow()
-        await _deactivate_duplicate_auto_accounts(session, order.user_id, account.id)
-        await session.flush()
-        return account
 
     traffic_gb = order.traffic_gb
     if provision and provision.total_bytes > 0:
@@ -125,6 +98,7 @@ async def _upsert_auto_account(
         order_id=order.id,
         user_id=order.user_id,
         config_ref=AUTO_CONFIG_REF,
+        panel_email=provision.panel_email if provision else None,
         subscription_path=subscription_url,
         expires_at=expires_at,
         traffic_limit_gb=traffic_gb,
@@ -188,7 +162,7 @@ async def complete_payment_approval(
     order.status = "completed"
 
     if config_ref == AUTO_CONFIG_REF:
-        vpn_account = await _upsert_auto_account(
+        vpn_account = await _create_auto_account(
             session, order, config_text, provision
         )
     elif order.renew_vpn_account_id:
@@ -240,19 +214,51 @@ async def complete_renewal_approval(
     subscription_url: str | None = None,
     provision: ProvisionResult | None = None,
 ) -> VPNAccount:
+    """
+    Complete a renewal with reset semantics: the new plan replaces the old
+    subscription entirely — no leftover time or traffic is carried over.
+    """
     payment.status = "approved"
     payment.reviewed_at = datetime.utcnow()
     payment.reviewed_by = admin_id
     order.status = "completed"
-    await extend_vpn_account(session, vpn_account, order, subscription_url)
+
     if provision is not None:
-        # The panel is authoritative: mirror its quota, and its expiry whenever
-        # the client really is still alive after the adjustment.
-        if provision.total_bytes > 0:
-            vpn_account.traffic_limit_gb = provision.total_bytes // GB
-        panel_expiry = _expiry_from_ms(provision.expiry_ms)
-        if panel_expiry is not None and panel_expiry > datetime.utcnow():
-            vpn_account.expires_at = panel_expiry
+        # Fresh subscription: a new panel client was created for this order.
+        expires_at = _expiry_from_ms(provision.expiry_ms)
+        if expires_at is None:
+            expires_at = datetime.utcnow() + timedelta(days=order.days)
+        traffic_gb = (
+            provision.total_bytes // GB
+            if provision.total_bytes > 0
+            else order.traffic_gb
+        )
+        new_account = VPNAccount(
+            order_id=order.id,
+            user_id=order.user_id,
+            config_ref=AUTO_CONFIG_REF,
+            panel_email=provision.panel_email,
+            subscription_path=provision.subscription_url,
+            expires_at=expires_at,
+            traffic_limit_gb=traffic_gb,
+            is_active=True,
+        )
+        session.add(new_account)
+        # The replaced subscription is discarded, not extended.
+        vpn_account.is_active = False
+        await session.commit()
+        await session.refresh(new_account)
+        return new_account
+
+    # Manual fallback: reset the existing row to the new plan's limits.
+    vpn_account.expires_at = datetime.utcnow() + timedelta(days=order.days)
+    vpn_account.traffic_limit_gb = order.traffic_gb
+    if subscription_url:
+        vpn_account.subscription_path = subscription_url
+    vpn_account.is_active = True
+    vpn_account.expiry_notified = False
+    vpn_account.traffic_low_notified = False
+    vpn_account.last_renewed_at = datetime.utcnow()
     await session.commit()
     await session.refresh(vpn_account)
     return vpn_account

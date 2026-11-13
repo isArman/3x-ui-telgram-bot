@@ -107,6 +107,7 @@ class VPNAccount(Base):
         BigInteger, ForeignKey("users.id"), nullable=False, index=True
     )
     config_ref: Mapped[str] = mapped_column(String(255), nullable=False)
+    panel_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     subscription_path: Mapped[str] = mapped_column(Text, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     traffic_limit_gb: Mapped[int] = mapped_column(Integer, nullable=False)

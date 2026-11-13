@@ -14,7 +14,11 @@ from app.services.panel_settings import (
     xui_client_for_panel,
 )
 from app.services.traffic_usage import client_record
-from app.utils.client_identity import build_client_comment, panel_client_email
+from app.utils.client_identity import (
+    build_client_comment,
+    panel_client_email,
+    panel_client_email_for_order,
+)
 from app.utils.logger import logger
 from app.xui.client import (
     XUIClient,
@@ -34,12 +38,12 @@ class ProvisionResult:
     Authoritative panel state after provisioning.
 
     The panel owns the real quota/expiry, so the database must mirror these
-    values instead of recomputing them — a repeat purchase extends the client
-    on the panel, and the local row has to follow.
+    values instead of recomputing them.
     """
 
     subscription_url: str
     client_email: str
+    panel_email: str = ""
     total_bytes: int = 0
     expiry_ms: int = 0
 
@@ -87,24 +91,24 @@ async def sync_active_clients_inbounds(
     inbound_ids: list[int],
 ) -> tuple[int, int]:
     """
-    Re-sync inbound membership for all active VPN users to the selected set.
+    Re-sync inbound membership for all active VPN clients to the selected set.
     Returns (ok_count, fail_count).
     """
     result = await session.execute(
-        select(User)
-        .join(VPNAccount, VPNAccount.user_id == User.id)
-        .where(VPNAccount.is_active.is_(True))
-        .distinct()
+        select(VPNAccount).where(
+            VPNAccount.is_active.is_(True),
+            VPNAccount.panel_email.isnot(None),
+        )
     )
-    users = list(result.scalars().all())
-    if not users:
+    accounts = list(result.scalars().all())
+    if not accounts:
         return 0, 0
 
     ok = 0
     fail = 0
     async with xui_client_for_panel(settings) as client:
-        for user in users:
-            email = panel_client_email(user)
+        for account in accounts:
+            email = account.panel_email
             try:
                 existing = await client.get_client(email)
                 if not existing:
@@ -121,6 +125,17 @@ async def sync_active_clients_inbounds(
     return ok, fail
 
 
+async def disable_panel_client(client: XUIClient, email: str) -> None:
+    """Disable (not delete) a panel client so its subscription stops working."""
+    detail = await client.get_client(email)
+    if not detail:
+        return
+    payload = prepare_client_update_payload(detail, email=email)
+    payload["enable"] = False
+    inbound_ids = [int(i) for i in (detail.get("inboundIds") or [])]
+    await client.update_client(email, payload, inbound_ids)
+
+
 async def provision_subscription_detailed(
     session: AsyncSession,
     settings: PanelSettings,
@@ -129,19 +144,33 @@ async def provision_subscription_detailed(
     existing_account: VPNAccount | None = None,
 ) -> Optional[ProvisionResult]:
     """
-    Create or extend a 3x-ui client and return the resulting panel state.
+    Create a fresh 3x-ui client for this order.
 
-    New client: created with the order's quota/expiry.
-    Existing client (renewal or repeat purchase): extended with an atomic
-    server-side delta via bulkAdjust, which also re-enables a client the panel
-    had auto-disabled for being depleted.
+    Every order gets its own panel client with exactly the plan's quota and
+    expiry — nothing is carried over from previous orders. When the order is a
+    renewal, the replaced client is disabled so the old subscription stops
+    working.
     """
-    email = panel_client_email(user)
+    email = panel_client_email_for_order(user, order.id)
     comment = build_client_comment(user)
     now_ms = int(time.time() * 1000)
-    add_bytes = _gb_to_bytes(order.traffic_gb)
-    add_ms = order.days * 24 * 60 * 60 * 1000
+    total_bytes = _gb_to_bytes(order.traffic_gb)
+    expiry_ms = now_ms + order.days * 24 * 60 * 60 * 1000
     device_limit = max(int(getattr(order, "device_limit", 1) or 1), 1)
+
+    if order.days <= 0 or order.traffic_gb <= 0:
+        logger.error(
+            "Auto provisioning skipped for order %s: invalid plan limits "
+            "(days=%s, traffic_gb=%s)",
+            order.id,
+            order.days,
+            order.traffic_gb,
+        )
+        return None
+
+    replaced_email: str | None = None
+    if order.renew_vpn_account_id and existing_account is not None:
+        replaced_email = existing_account.panel_email or panel_client_email(user)
 
     try:
         async with xui_client_for_panel(settings) as client:
@@ -152,61 +181,36 @@ async def provision_subscription_detailed(
                 logger.error("Auto provisioning skipped: no valid inbounds selected")
                 return None
 
-            existing_client = await client.get_client(email)
-            client_data = client_record(existing_client or {})
+            detail = await client.add_client(
+                email,
+                inbound_ids,
+                total_bytes,
+                expiry_ms,
+                comment,
+                limit_ip=device_limit,
+            )
+            logger.info(
+                "Created 3x-ui client %s for order %s (%s days, %s GB)",
+                email,
+                order.id,
+                order.days,
+                order.traffic_gb,
+            )
 
-            if client_data:
-                # Extend rather than reset: bulkAdjust is an atomic
-                # read-modify-write on the panel (no client-side race) and
-                # re-enables a client that was auto-disabled for being depleted.
-                adjusted = await client.bulk_adjust(
-                    [email],
-                    add_days=order.days,
-                    add_bytes=add_bytes,
-                )
-                if _bulk_adjust_skipped(adjusted, email):
-                    logger.error(
-                        "bulkAdjust skipped client %s for order %s: %s",
-                        email,
-                        order.id,
-                        adjusted.get("skipped"),
-                    )
-                    return None
-                # bulkAdjust does not touch limitIp, so a plan with a different
-                # device count needs an explicit update. The full record is sent
-                # because the panel replaces the row.
-                if int(client_data.get("limitIp") or 0) != device_limit:
-                    payload = prepare_client_update_payload(
-                        existing_client or {},
-                        email=email,
-                        limit_ip=device_limit,
-                    )
-                    detail = await client.update_client(email, payload, inbound_ids)
+            if replaced_email:
+                try:
+                    await disable_panel_client(client, replaced_email)
                     logger.info(
-                        "Updated device limit of client %s to %s", email, device_limit
+                        "Disabled replaced 3x-ui client %s (order %s)",
+                        replaced_email,
+                        order.id,
                     )
-                else:
-                    # Ensure inbound membership matches the selected set.
-                    detail = await client.sync_client_inbounds(email, inbound_ids)
-                logger.info(
-                    "Extended 3x-ui client %s for order %s (+%s days, +%s GB)",
-                    email,
-                    order.id,
-                    order.days,
-                    order.traffic_gb,
-                )
-            else:
-                detail = await client.add_client(
-                    email,
-                    inbound_ids,
-                    add_bytes,
-                    now_ms + add_ms,
-                    comment,
-                    limit_ip=device_limit,
-                )
-                logger.info(
-                    "Created 3x-ui client %s for order %s", email, order.id
-                )
+                except Exception as exc:
+                    logger.warning(
+                        "Could not disable replaced client %s: %s",
+                        replaced_email,
+                        exc,
+                    )
     except XUIError as exc:
         logger.error("3x-ui provisioning failed for order %s: %s", order.id, exc)
         return None
@@ -223,6 +227,7 @@ async def provision_subscription_detailed(
     return ProvisionResult(
         subscription_url=build_subscription_url(settings.subscription_base_url, sub_id),
         client_email=email,
+        panel_email=email,
         total_bytes=int(client_data.get("totalGB") or 0),
         expiry_ms=int(client_data.get("expiryTime") or 0),
     )
