@@ -164,15 +164,6 @@ def payment_methods_keyboard(
     return builder.as_markup()
 
 
-def trial_keyboard() -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    builder.row(
-        InlineKeyboardButton(
-            text="🎁 دریافت تست رایگان", callback_data="trial:start"
-        )
-    )
-    return builder.as_markup()
-
 
 def usage_keyboard(has_account: bool = True) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()

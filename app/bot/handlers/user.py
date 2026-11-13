@@ -41,7 +41,6 @@ from app.bot.keyboards.user import (
     flow_nav_keyboard,
     wallet_pay_keyboard,
     payment_methods_keyboard,
-    trial_keyboard,
     usage_keyboard,
 )
 from app.services.users import get_or_create_user
@@ -89,12 +88,7 @@ from app.services.telegram_payments import (
     order_id_from_payload,
     send_stars_invoice,
 )
-from app.services.trial import (
-    create_trial_order,
-    get_trial_settings,
-    mark_trial_used,
-    trial_available,
-)
+
 
 router = Router()
 
@@ -511,20 +505,6 @@ async def cmd_start(message: Message, state: FSMContext):
         reply_markup=user_main_menu(message.from_user.id),
     )
 
-    # Offer the free trial when the customer is still eligible for one.
-    async with AsyncSessionLocal() as session:
-        can_take, _ = await trial_available(session, message.from_user.id)
-        trial_settings = await get_trial_settings(session)
-    if can_take:
-        await message.answer(
-            get_text(
-                "trial_available",
-                days=trial_settings.days,
-                traffic=trial_settings.gb,
-            ),
-            reply_markup=trial_keyboard(),
-        )
-
 
 @router.message(F.text.in_(button_texts(BTN_REFERRAL)))
 async def show_referral(message: Message, state: FSMContext):
@@ -692,70 +672,6 @@ async def promo_receive(message: Message, state: FSMContext):
 
 
 @router.callback_query(F.data == "trial:start")
-async def trial_start(callback: CallbackQuery, state: FSMContext):
-    """Give the customer their one free trial."""
-    from app.utils.logger import logger
-
-    async with AsyncSessionLocal() as session:
-        can_take, reason = await trial_available(session, callback.from_user.id)
-        if not can_take:
-            await callback.answer(reason, show_alert=True)
-            return
-
-        user, _ = await get_or_create_user(session, callback.from_user)
-        trial_settings = await get_trial_settings(session)
-        order = await create_trial_order(session, user, trial_settings)
-        await mark_trial_used(session, user)
-        await session.commit()
-        await session.refresh(order)
-
-    await callback.answer()
-    await callback.message.answer(get_text("trial_claimed"))
-
-    try:
-        async with AsyncSessionLocal() as session:
-            await fulfill_trial_order(callback.bot, session, order)
-    except Exception as exc:
-        logger.error("Failed to deliver trial order %s: %s", order.id, exc)
-        await callback.message.answer(
-            "ثبت تست انجام شد اما فعال‌سازی خودکار ناموفق بود. ادمین به‌زودی اکانت را می‌فرستد."
-        )
-
-
-async def fulfill_trial_order(bot, session: AsyncSession, order: Order) -> None:
-    """Deliver a trial the same way a paid order is delivered."""
-    from app.bot.handlers.admin import send_config_to_user, send_renewal_to_user
-    from app.services.order_fulfillment import fulfill_paid_order
-
-    plan = await get_plan(session, order.plan_id) if order.plan_id else None
-    plan_name = plan["name"] if plan else None
-
-    payment = Payment(
-        order_id=order.id,
-        user_id=order.user_id,
-        receipt_file_id="trial",
-        status="pending",
-        method="trial",
-    )
-    session.add(payment)
-    await session.commit()
-    await session.refresh(payment)
-
-    fulfill = await fulfill_paid_order(session, payment, order, None, plan_name)
-    if fulfill.kind in ("renewal_auto", "renewal_db") and fulfill.vpn_account:
-        await send_renewal_to_user(bot, order.user_id, fulfill.vpn_account, order)
-        return
-    if fulfill.kind in ("new_auto", "new_inventory") and fulfill.config_text:
-        await send_config_to_user(bot, order.user_id, fulfill.config_text)
-        return
-    await notify_admins_trial_manual(bot, order, payment)
-
-
-async def notify_admins_trial_manual(bot, order: Order, payment: Payment) -> None:
-    """Tell the admins that a trial needs a manual subscription link."""
-    await notify_admins_wallet_manual(bot, payment, order)
-
-
 @router.callback_query(F.data.startswith("plan:"))
 async def select_plan(callback: CallbackQuery, state: FSMContext):
     """Handle plan selection"""

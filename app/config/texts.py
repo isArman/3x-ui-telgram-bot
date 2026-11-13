@@ -304,11 +304,7 @@ TEXTS = {
 {created_at}
 """,
 
-    # --- trial / promo / payment methods ---------------------------------
-    "trial_available": "🎁 تست رایگان {days} روزه با {traffic} گیگابایت",
-    "trial_claimed": "تست رایگان شما فعال شد. اشتراک به‌زودی ارسال می‌شود.",
-    "trial_unavailable": "تست رایگان در حال حاضر در دسترس نیست.",
-    "trial_button": "🎁 دریافت تست رایگان",
+
 
     "promo_enter": "کد پرومو را بفرستید (یا «لغو» برای بازگشت).",
     "promo_applied": "کد «{code}» اعمال شد.",
@@ -376,7 +372,7 @@ TEXTS = {
     "admin_backup_ready": "پشتیبان دیتابیس آماده شد.",
     "admin_backup_failed": "پشتیبان‌گیری ناموفق بود: {error}",
     "maintenance_notice": "فروش موقتاً متوقف است. کمی بعد دوباره تلاش کنید.",
-    "trial_settings": "تست رایگان: {state} — {days} روز، {traffic} گیگابایت",
+
 }
 
 

@@ -56,4 +56,3 @@ class AdminStates(StatesGroup):
     waiting_for_user_lookup = State()
     waiting_for_promo_code = State()
     waiting_for_promo_value = State()
-    waiting_for_trial_days = State()

@@ -11,7 +11,6 @@ BTN_WALLET = "کیف پول من"
 BTN_REFERRAL = "دعوت دوستان"
 BTN_TOP_UP = "شارژ کیف پول"
 BTN_ADMIN_PANEL = "پنل ادمین"
-BTN_TRIAL = "تست رایگان"
 BTN_PROMO_CODE = "کد پرومو"
 
 # Telegram caches reply keyboards on the client. After we dropped emojis from
@@ -81,6 +80,7 @@ CALLBACK_DATA_MAX_BYTES = 64
 def callback_data_fits(data: str) -> bool:
     """True when a callback payload stays within Telegram's 64-byte limit."""
     return len((data or "").encode("utf-8")) <= CALLBACK_DATA_MAX_BYTES
+
 
 CONFIGS_MENU_TEXT = (
     "مدیریت کانفیگ‌های پلن\n\n"
