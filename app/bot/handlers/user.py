@@ -121,6 +121,32 @@ async def notify_referral_cashback(bot, cashback: tuple[int, int] | None) -> Non
         )
 
 
+async def notify_buyer_cashback(bot, user_id: int, amount: int) -> None:
+    """Tell the buyer their 10% purchase cashback was credited to the wallet."""
+    if not amount or amount < 1:
+        return
+    from app.bot.keyboards.user import cashback_keyboard
+    from app.services.wallet import get_balance
+    from app.database.session import AsyncSessionLocal
+
+    try:
+        async with AsyncSessionLocal() as session:
+            balance = await get_balance(session, user_id)
+        await bot.send_message(
+            chat_id=user_id,
+            text=get_text(
+                "buyer_cashback_notify", amount=amount, balance=balance
+            ),
+            reply_markup=cashback_keyboard(),
+        )
+    except Exception as exc:
+        from app.utils.logger import logger
+
+        logger.warning(
+            "Failed to notify buyer %s about cashback: %s", user_id, exc
+        )
+
+
 def user_main_menu(user_id: int):
     return main_menu_keyboard(is_admin=user_id in settings.ADMIN_IDS)
 
@@ -406,6 +432,7 @@ async def fulfill_full_wallet_order(
 
     fulfill = await fulfill_paid_order(session, payment, order, None, plan_name)
     await notify_referral_cashback(bot, fulfill.referral_cashback)
+    await notify_buyer_cashback(bot, order.user_id, fulfill.buyer_cashback or 0)
 
     if fulfill.kind in ("renewal_auto", "renewal_db") and fulfill.vpn_account:
         await send_renewal_to_user(bot, order.user_id, fulfill.vpn_account, order)
@@ -1251,6 +1278,7 @@ async def fulfill_paid_order_for_user(
     plan_name = plan["name"] if plan else None
 
     fulfill = await fulfill_paid_order(session, payment, order, None, plan_name)
+    await notify_buyer_cashback(bot, order.user_id, fulfill.buyer_cashback or 0)
     if fulfill.kind in ("renewal_auto", "renewal_db") and fulfill.vpn_account:
         await send_renewal_to_user(bot, order.user_id, fulfill.vpn_account, order)
         return

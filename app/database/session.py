@@ -109,6 +109,7 @@ async def _migrate_sqlite_columns(conn):
     for column, ddl in (
         ("is_trial", "BOOLEAN DEFAULT 0"),
         ("device_limit", "INTEGER DEFAULT 1"),
+        ("buyer_cashback_paid", "BOOLEAN DEFAULT 0"),
         ("promo_code", "VARCHAR(50)"),
         ("promo_bonus_days", "INTEGER DEFAULT 0"),
         ("promo_bonus_gb", "INTEGER DEFAULT 0"),

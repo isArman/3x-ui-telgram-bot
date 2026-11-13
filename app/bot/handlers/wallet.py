@@ -78,6 +78,20 @@ async def show_wallet(message: Message, state: FSMContext):
     )
 
 
+@router.callback_query(F.data == "wallet:menu")
+async def wallet_menu_callback(callback: CallbackQuery, state: FSMContext):
+    """Open the wallet from an inline button (e.g. the cashback notice)."""
+    await state.clear()
+    async with AsyncSessionLocal() as session:
+        balance = await get_balance(session, callback.from_user.id)
+    await callback.message.answer(
+        get_text("wallet_home", balance=balance),
+        reply_markup=wallet_keyboard(),
+    )
+    await state.set_state(WalletStates.home)
+    await callback.answer()
+
+
 @router.message(WalletStates.home, F.text.in_({BACK_BUTTON, CANCEL_BUTTON}))
 async def wallet_home_back(message: Message, state: FSMContext):
     """Return to main menu from wallet home (بازگشت / لغو)."""

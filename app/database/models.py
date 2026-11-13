@@ -43,6 +43,7 @@ class Order(Base):
     referral_discount_applied: Mapped[bool] = mapped_column(Boolean, default=False)
     referral_cashback_paid: Mapped[bool] = mapped_column(Boolean, default=False)
     referral_cashback_level2_paid: Mapped[bool] = mapped_column(Boolean, default=False)
+    buyer_cashback_paid: Mapped[bool] = mapped_column(Boolean, default=False)
     is_trial: Mapped[bool] = mapped_column(Boolean, default=False)
     device_limit: Mapped[int] = mapped_column(Integer, default=1)
     promo_code: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)

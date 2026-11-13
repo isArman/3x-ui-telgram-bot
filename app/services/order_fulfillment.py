@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import Order, Payment, PlanConfig, User, VPNAccount
@@ -17,6 +17,40 @@ from app.services.xui_provisioning import (
 
 GB = 1024**3
 AUTO_CONFIG_REF = "xui-auto"
+BUYER_CASHBACK_PERCENT = 10
+
+
+async def credit_buyer_cashback(session: AsyncSession, order: Order) -> int:
+    """
+    Credit the buyer 10% of the order price to their wallet, exactly once.
+
+    The flag is claimed with a conditional UPDATE first so a retried approval
+    can never credit the same order twice.
+    """
+    from app.services.wallet import credit_balance
+
+    if order.buyer_cashback_paid:
+        return 0
+
+    base = int(order.original_price if order.original_price is not None else order.price)
+    amount = base * BUYER_CASHBACK_PERCENT // 100
+    if amount < 1:
+        order.buyer_cashback_paid = True
+        await session.flush()
+        return 0
+
+    claim = await session.execute(
+        update(Order)
+        .where(Order.id == order.id, Order.buyer_cashback_paid.is_(False))
+        .values(buyer_cashback_paid=True)
+    )
+    if claim.rowcount != 1:
+        order.buyer_cashback_paid = True
+        return 0
+
+    await credit_balance(session, order.user_id, amount)
+    await session.flush()
+    return amount
 
 
 @dataclass
@@ -30,6 +64,7 @@ class FulfillResult:
     config_ref: str | None = None
     plan_name: str | None = None
     referral_cashback: tuple[int, int] | None = None  # (referrer_id, amount)
+    buyer_cashback: int | None = None  # amount credited to buyer's wallet
 
 
 def _expiry_from_ms(expiry_ms: int) -> datetime | None:
@@ -145,6 +180,7 @@ async def complete_payment_approval(
 ) -> tuple[int, int] | None:
     """Complete new-order payment. Returns referral cashback (referrer_id, amount) if any."""
     from app.services.referral import grant_referral_cashback
+    from app.services.wallet import credit_balance
 
     payment.status = "approved"
     payment.reviewed_at = datetime.utcnow()
@@ -253,21 +289,27 @@ async def fulfill_paid_order(
                 session, payment, order, reviewer_id, vpn_account, sub_url.subscription_url,
                 provision=sub_url,
             )
+            buyer_cashback = await credit_buyer_cashback(session, order)
+            await session.commit()
             return FulfillResult(
                 kind="renewal_auto",
                 config_text=sub_url.subscription_url,
                 vpn_account=vpn_account,
                 plan_name=plan_name,
+                buyer_cashback=buyer_cashback,
             )
 
         vpn_account = await complete_renewal_approval(
             session, payment, order, reviewer_id, vpn_account, None
         )
+        buyer_cashback = await credit_buyer_cashback(session, order)
+        await session.commit()
         return FulfillResult(
             kind="renewal_db",
             config_text=vpn_account.subscription_path,
             vpn_account=vpn_account,
             plan_name=plan_name,
+            buyer_cashback=buyer_cashback,
         )
 
     # New account — auto 3x-ui
@@ -282,12 +324,15 @@ async def fulfill_paid_order(
             config_ref=AUTO_CONFIG_REF,
             provision=sub_url,
         )
+        buyer_cashback = await credit_buyer_cashback(session, order)
+        await session.commit()
         return FulfillResult(
             kind="new_auto",
             config_text=sub_url.subscription_url,
             config_ref=AUTO_CONFIG_REF,
             plan_name=plan_name,
             referral_cashback=cashback,
+            buyer_cashback=buyer_cashback,
         )
 
     # Inventory fallback
@@ -304,12 +349,15 @@ async def fulfill_paid_order(
                 config_entry.config_text,
                 config_entry.id,
             )
+            buyer_cashback = await credit_buyer_cashback(session, order)
+            await session.commit()
             return FulfillResult(
                 kind="new_inventory",
                 config_text=config_entry.config_text,
                 plan_config_id=config_entry.id,
                 plan_name=plan_name,
                 referral_cashback=cashback,
+                buyer_cashback=buyer_cashback,
             )
 
     return FulfillResult(kind="needs_manual", plan_name=plan_name)

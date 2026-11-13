@@ -80,6 +80,18 @@ def wallet_pay_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def cashback_keyboard() -> InlineKeyboardMarkup:
+    """Inline keyboard for the cashback notification — opens the wallet."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text="💰 مشاهده کیف پول",
+            callback_data="wallet:menu",
+        )
+    )
+    return builder.as_markup()
+
+
 def flow_nav_keyboard() -> ReplyKeyboardMarkup:
     """Back / cancel keyboard for multi-step user flows."""
     builder = ReplyKeyboardBuilder()
